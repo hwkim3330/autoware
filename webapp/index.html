@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CARLA · ROS 2 Live Monitor — autoware-keti</title>
+<script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: #0d1117; color: #e6edf3; }
+  header { padding: 12px 18px; background: #161b22; border-bottom: 1px solid #30363d; display:flex; align-items:center; gap:12px; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  #conn { margin-left:auto; font-size:12px; padding:4px 10px; border-radius:12px; background:#3d1d1d; color:#ff7b72; }
+  #conn.ok { background:#16301c; color:#3fb950; }
+  main { display:grid; grid-template-columns: 1fr 1fr; gap:14px; padding:14px; max-width:1100px; margin:0 auto; }
+  .card { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:14px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:#8b949e; margin:0 0 10px; }
+  .kv { display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px solid #21262d; }
+  .kv:last-child { border-bottom:0; }
+  .kv b { font-variant-numeric: tabular-nums; font-weight:600; }
+  .big { font-size:30px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .unit { font-size:13px; color:#8b949e; margin-left:4px; }
+  img#cam { width:100%; border-radius:8px; background:#000; min-height:180px; object-fit:contain; }
+  .full { grid-column: 1 / -1; }
+  small { color:#6e7681; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🚗 CARLA · ROS 2 Live Monitor</h1>
+  <span id="conn">disconnected</span>
+</header>
+<main>
+  <div class="card">
+    <h2>Speed</h2>
+    <div><span id="speed" class="big">—</span><span class="unit">km/h</span></div>
+  </div>
+  <div class="card">
+    <h2>Vehicle status</h2>
+    <div class="kv"><span>velocity (m/s)</span><b id="vel">—</b></div>
+    <div class="kv"><span>throttle</span><b id="thr">—</b></div>
+    <div class="kv"><span>steer</span><b id="steer">—</b></div>
+    <div class="kv"><span>brake</span><b id="brake">—</b></div>
+  </div>
+  <div class="card">
+    <h2>Odometry (map)</h2>
+    <div class="kv"><span>x</span><b id="px">—</b></div>
+    <div class="kv"><span>y</span><b id="py">—</b></div>
+    <div class="kv"><span>z</span><b id="pz">—</b></div>
+  </div>
+  <div class="card">
+    <h2>GNSS / IMU</h2>
+    <div class="kv"><span>lat</span><b id="lat">—</b></div>
+    <div class="kv"><span>lon</span><b id="lon">—</b></div>
+    <div class="kv"><span>|angular vel| z</span><b id="gz">—</b></div>
+  </div>
+  <div class="card full">
+    <h2>Front camera <small>(via web_video_server :8080 — slow on software rendering)</small></h2>
+    <img id="cam" alt="front camera stream" />
+  </div>
+</main>
+<script>
+  // rosbridge_server websocket (start with scripts/start_webapp.sh)
+  const ROSBRIDGE = `ws://${location.hostname || 'localhost'}:9090`;
+  const VIDEO_HOST = `http://${location.hostname || 'localhost'}:8080`;
+
+  const conn = document.getElementById('conn');
+  const ros = new ROSLIB.Ros({ url: ROSBRIDGE });
+  ros.on('connection', () => { conn.textContent = 'connected'; conn.className = 'ok'; });
+  ros.on('close',      () => { conn.textContent = 'disconnected'; conn.className = ''; });
+  ros.on('error',      () => { conn.textContent = 'error'; conn.className = ''; });
+
+  const set = (id, v) => document.getElementById(id).textContent = v;
+  const f = (n, d=2) => (n === undefined || n === null) ? '—' : Number(n).toFixed(d);
+
+  new ROSLIB.Topic({ ros, name:'/carla/ego_vehicle/speedometer', messageType:'std_msgs/Float32' })
+    .subscribe(m => set('speed', f(m.data * 3.6, 1)));   // m/s -> km/h
+
+  new ROSLIB.Topic({ ros, name:'/carla/ego_vehicle/vehicle_status', messageType:'carla_msgs/CarlaEgoVehicleStatus' })
+    .subscribe(m => {
+      set('vel', f(m.velocity));
+      set('thr', f(m.control && m.control.throttle));
+      set('steer', f(m.control && m.control.steer));
+      set('brake', f(m.control && m.control.brake));
+    });
+
+  new ROSLIB.Topic({ ros, name:'/carla/ego_vehicle/odometry', messageType:'nav_msgs/Odometry' })
+    .subscribe(m => {
+      const p = m.pose.pose.position;
+      set('px', f(p.x)); set('py', f(p.y)); set('pz', f(p.z));
+    });
+
+  new ROSLIB.Topic({ ros, name:'/carla/ego_vehicle/gnss', messageType:'sensor_msgs/NavSatFix' })
+    .subscribe(m => { set('lat', f(m.latitude, 6)); set('lon', f(m.longitude, 6)); });
+
+  new ROSLIB.Topic({ ros, name:'/carla/ego_vehicle/imu', messageType:'sensor_msgs/Imu' })
+    .subscribe(m => set('gz', f(m.angular_velocity.z, 4)));
+
+  // Camera via web_video_server MJPEG stream
+  document.getElementById('cam').src =
+    `${VIDEO_HOST}/stream?topic=/carla/ego_vehicle/rgb_front/image&type=mjpeg&quality=50`;
+</script>
+</body>
+</html>

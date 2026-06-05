@@ -47,12 +47,23 @@ source /opt/ros/jazzy/setup.bash
 ros2 topic list | grep carla
 ```
 
-## Status
+## Status (verified on this box)
 
-- [x] CARLA 0.9.16 server installed (`/opt/carla-simulator`) and running on Intel iGPU via lavapipe
+- [x] CARLA 0.9.16 server installed (`/opt/carla-simulator`), running on Intel UHD 630 via lavapipe
 - [x] `carla-ros-bridge` built from source for ROS 2 Jazzy (see `docs/ros2-jazzy.md`)
-- [ ] Autoware interface (`ros/`) — in progress
-- [ ] Web app (`webapp/`) — planned
+- [x] Ego vehicle spawned; `/carla/ego_vehicle/*` topics published
+  - ✅ working: `odometry`, `imu`, `gnss`, `vehicle_status`, `speedometer`, `lidar` (1801 pts/scan)
+  - ⚠️ `rgb_front/image`: **0 fps on lavapipe** — CPU rendering can't keep up with camera. Needs a GPU.
+- [x] Web monitor (`webapp/`): live telemetry over rosbridge websocket + MJPEG camera via web_video_server
+- [ ] `autoware_carla_interface` topic remap (`ros/`) — pending
+
+### Resolved: Fast-CDR ABI mismatch on Jazzy
+The system was **half-upgraded**: `ros-jazzy-fastcdr` was 2.2.5 (Jan) while
+newer packages (`derived_object_msgs` 4.0.0, `rosbridge_suite` 2.6.0, Apr builds)
+needed 2.2.7 → bridge/rosbridge crashed with `undefined symbol ...Cdr9serializeEj`.
+Fixed by a full `apt dist-upgrade` of the ROS 2 Jazzy stack to a consistent ABI
+(fastcdr 2.2.7) + clean rebuild of `carla-ros-ws`. `sensor.pseudo.objects`
+(derived_object_msgs) is back in `ros/objects_lite.json`.
 
 ## License / origin
 
