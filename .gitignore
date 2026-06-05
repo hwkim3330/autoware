@@ -1,0 +1,21 @@
+# ROS 2 / colcon
+build/
+install/
+log/
+*.pyc
+__pycache__/
+
+# node / webapp
+node_modules/
+dist/
+.env
+
+# CARLA / large artifacts
+*.tar.gz
+*.log
+*.bag
+*.mcap
+
+# editor
+.vscode/
+.idea/
