@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Autoware + CARLA Demo
+Comment=Start CARLA 0.9.16 + Autoware (rviz) + tablet gateway
+Exec=gnome-terminal --title="Autoware+CARLA" -- bash -lc "/home/kim/autoware-keti/scripts/start_all.sh Town01; exec bash"
+Icon=utilities-terminal
+Terminal=false
+Categories=Development;

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Tablet Gateway (CARLA→app)
+Comment=CARLA telemetry -> WebSocket for the tablet app
+Exec=gnome-terminal --title="Tablet Gateway" -- bash -lc "cd /home/kim/autoware-keti/ros && adb reverse tcp:8765 tcp:8765; python3 -u carla_ws_gateway.py; exec bash"
+Icon=network-wireless
+Terminal=false
+Categories=Development;
