@@ -43,7 +43,17 @@ live tablet demo used, but it is not the path for Autoware.
 ## Status
 - [x] Docker + nvidia-container-toolkit (GPU-in-docker verified: RTX 3090)
 - [x] Autoware image pulled (`universe-cuda`, 20.4GB) with carla interface
-- [ ] driver 535 + reboot
-- [ ] CARLA 0.9.16 docker pull + run
-- [ ] autoware_carla_interface bring-up + map
-- [ ] closed loop + tablet app
+- [x] **nvidia-driver-535 installed (535.309.01); 580 removed — REBOOT required**
+      (pre-reboot `nvidia-smi` shows "Driver/library version mismatch" — expected;
+      the running kernel module is still 580 until reboot)
+- [x] CARLA 0.9.16 docker image pulled (`carlasim/carla:0.9.16`)
+- [ ] reboot → verify `nvidia-smi` = 535 → CARLA 0.9.16 renders (docker, headless)
+- [ ] autoware_carla_interface bring-up + Town01 map
+- [ ] closed loop + tablet app (ros/carla_ws_gateway.py)
+
+### Confirmed by web search (driver direction)
+CARLA 0.9.x (UE4.26 / Vulkan) RenderThread-timeouts on NVIDIA **550/555/560+**
+(incl. 580/6xx) are a known issue; `-prefernvidia` / `VK_ICD_FILENAMES` don't fix it,
+`-opengl` is unavailable (Vulkan-only since 0.9.12). Newer driver = worse for UE4.26.
+→ 535 (≈2023, supports RTX 3090) is the compatible target. Refs: carla issues
+#8043, #8079, #9502, #1456.
