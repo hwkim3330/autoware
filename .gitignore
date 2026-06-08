@@ -19,3 +19,8 @@ dist/
 # editor
 .vscode/
 .idea/
+
+# Autoware maps (large, download via scripts/download_carla_maps.sh)
+autoware_map/
+autoware-contents/
+*.pcd
