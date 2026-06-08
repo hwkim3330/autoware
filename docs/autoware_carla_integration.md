@@ -48,7 +48,8 @@ live tablet demo used, but it is not the path for Autoware.
       the running kernel module is still 580 until reboot)
 - [x] CARLA 0.9.16 docker image pulled (`carlasim/carla:0.9.16`)
 - [x] reboot done → driver 535 active; native CARLA 0.9.16 renders on RTX 3090 (6.8GB VRAM, world ready Town10HD). Docker CARLA image too old (U18.04 Vulkan loader) for 535 ICD → use NATIVE 0.9.16.
-- [ ] autoware_carla_interface bring-up + Town01 map
+- [x] **autoware_carla_interface LIVE**: native CARLA 0.9.16 -> Autoware container (--net host). Ego spawns with Autoware sensor kit; /sensing/{lidar(6.9Hz),gnss,imu,camera x6}, /control/command/control_cmd all flowing. carla==0.9.16 pip-installed in container.
+- [ ] full autonomy stack (lanelet2+pcd Town map) + rviz goal -> closed-loop control
 - [ ] closed loop + tablet app (ros/carla_ws_gateway.py)
 
 ### Confirmed by web search (driver direction)
