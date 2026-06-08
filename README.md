@@ -1,71 +1,69 @@
-# autoware-keti — CARLA ↔ ROS 2 ↔ Autoware integration (monorepo)
+# autoware-keti — CARLA ↔ ROS 2 ↔ Autoware + tablet monitor
 
-KETI integration of the **CARLA 0.9.16** driving simulator with **ROS 2 Jazzy** and
-**Autoware**, plus a web app for monitoring/control. Built and validated on a
-machine **without an NVIDIA GPU** (Intel UHD 630) using software (lavapipe) rendering.
-
-## Repository layout (monorepo)
+KETI autonomous-driving integration: the **CARLA** simulator driving an **Autoware**
+(ROS 2 Humble) stack, with a **Flutter tablet app** ("Multi-Mode Autoware Monitor")
+showing the live localization multi-mode. Runs on an RTX 3090 box (Ubuntu 24.04 /
+ROS 2 Jazzy host, Autoware in Docker).
 
 ```
-.
-├── ros/        # ROS 2 integration: carla-ros-bridge usage, Autoware interface, launch
-├── webapp/     # Web app (monitoring / control) — connects to ROS 2 over rosbridge/websocket
-├── scripts/    # One-shot setup + launch helpers (CARLA, swap, bridge)
-├── launch/     # Top-level launch configs tying CARLA + bridge (+ Autoware) together
-└── docs/       # Setup notes, hardware reality, troubleshooting
+CARLA (RTX 3090) ──sensors──► Autoware (docker, Humble) ──control──► CARLA ego
+       │                                                              
+       └── carla_ws_gateway.py ──WebSocket──► Flutter app (Galaxy Tab, 3D dashboard)
 ```
 
-## Hardware reality (important)
+## What works (verified)
+| Piece | Status |
+|---|---|
+| **CARLA 0.9.16** native, RTX 3090 (driver 535) | ✅ GPU render, world ready |
+| **CARLA 0.10.0** (UE5) on driver 580 | ✅ (alt; for the tablet live demo) |
+| **CARLA → Autoware** sensor/control bridge (`autoware_carla_interface`, docker) | ✅ `/sensing/{lidar,gnss,imu,camera×6}`, `/control/command/control_cmd` live |
+| **All 8 CARLA town maps** (lanelet2 + pcd) | ✅ `scripts/download_carla_maps.sh` |
+| **Tablet app** — installed on Galaxy Tab S7 FE | ✅ live data via gateway; 3D car + Tesla dashboard |
+| Full autonomy closed loop (goal → plan → drive in rviz) | ⏳ bring-up (Autoware ML artifacts + e2e launch) |
 
-This box has **no discrete GPU** — only Intel UHD 630. CARLA's UE4.26 renderer
-crashes on the iGPU (`Out of Local Memory, MemTypeIndex=1`, the iGPU's Vulkan
-device-local heap is too small). The working configuration forces **lavapipe
-(llvmpipe) CPU software rendering**:
+## The driver lesson (important)
+CARLA 0.9.x = **UE4.26**; its Vulkan RHI **hangs the render thread on NVIDIA 550/560+/580**
+(known issue). Use **driver 535** for CARLA 0.9.x. CARLA 0.10.0 = UE5 and runs on 580.
+Docker shares the **host** driver, so the host must be 535 for any 0.9.x (docker or native).
+See `docs/carla_live_setup.md`, `docs/autoware_carla_integration.md`.
 
-- `VK_ICD_FILENAMES` **and** `VK_DRIVER_FILES` → lavapipe ICD (so the iGPU is never selected)
-- a large **swapfile** + disabling `systemd-oomd` (CPU rendering needs >16GB)
+## Layout
+```
+app/multimode_autoware_monitor/   Flutter tablet app (3D car, Tesla dashboard, 9 screens)
+ros/carla_ws_gateway.py           CARLA → WebSocket gateway (live telemetry → app)
+ros/objects_lite.json             lite ego sensor set
+scripts/                          start_carla_native.sh, start_autoware.sh, start_all.sh,
+                                  download_carla_maps.sh, setup_swap.sh, start_bridge.sh
+desktop/                          double-click launchers (also in ~/Desktop)
+docs/                             setup + integration notes
+```
 
-It runs, but slowly (sub-realtime). For real sensor throughput, add an NVIDIA GPU
-or raise the BIOS iGPU/DVMT allocation. For full Autoware, note that Autoware
-Universe officially targets **ROS 2 Humble** — see `docs/autoware.md`.
-
-## Quick start
-
+## Quick start (on the GPU desktop, monitor on the RTX 3090, logged into GNOME)
 ```bash
-# 0) one-time: swap + disable oomd (software rendering needs lots of RAM)
-sudo ./scripts/setup_swap.sh 32
+# one-time
+./scripts/download_carla_maps.sh            # all 8 town maps -> ~/autoware_map
+# everything (CARLA + Autoware + rviz + tablet gateway)
+./scripts/start_all.sh Town01
+# or double-click the "Autoware + CARLA Demo" icon on the desktop
+```
+Tablet app: **Settings → USB_ADB** (`adb reverse tcp:8765 tcp:8765`) or **WIFI**
+`ws://<PC-IP>:8765/ws`. Starts in DEMO (built-in mock) and auto-falls back to DEMO if
+the gateway is unreachable.
 
-# 1) start the CARLA server (software/lavapipe, port 2000)
-./scripts/start_carla.sh
-#    first launch compiles shaders on CPU — get_world() may take a few minutes
-
-# 2) start the ROS 2 bridge (in another terminal)
-./scripts/start_bridge.sh
-
-# 3) verify ROS 2 topics
-source /opt/ros/jazzy/setup.bash
-ros2 topic list | grep carla
+## App
+Flutter, no external state-management/charts. 3D vehicle via `model_viewer_plus`,
+live updates via `StreamBuilder` + `web_socket_channel`. Screens: Dashboard (3D/2D car
++ hero), Vehicle (Tesla-style 3D), Localization (single/dual/triple pipeline), Sensors,
+Autoware stack, ROii architecture, Metrics, Events, Settings. Build/install:
+```bash
+cd app/multimode_autoware_monitor && flutter create . --platforms=android
+flutter build apk --debug && adb install -r build/app/outputs/flutter-apk/app-debug.apk
 ```
 
-## Status (verified on this box)
+## Docs
+- `docs/carla_live_setup.md` — CARLA on RTX 3090 (native/headless), gotchas
+- `docs/autoware_carla_integration.md` — driver 535 + CARLA 0.9.16 + Autoware docker path
+- `docs/ros2-jazzy.md` — carla-ros-bridge build on Jazzy (alt to native ROS2/interface)
+- `docs/data_contract.md`, `docs/connection_guide.md`, `docs/app_concept.md`
 
-- [x] CARLA 0.9.16 server installed (`/opt/carla-simulator`), running on Intel UHD 630 via lavapipe
-- [x] `carla-ros-bridge` built from source for ROS 2 Jazzy (see `docs/ros2-jazzy.md`)
-- [x] Ego vehicle spawned; `/carla/ego_vehicle/*` topics published
-  - ✅ working: `odometry`, `imu`, `gnss`, `vehicle_status`, `speedometer`, `lidar` (1801 pts/scan)
-  - ⚠️ `rgb_front/image`: **0 fps on lavapipe** — CPU rendering can't keep up with camera. Needs a GPU.
-- [x] Web monitor (`webapp/`): live telemetry over rosbridge websocket + MJPEG camera via web_video_server
-- [ ] `autoware_carla_interface` topic remap (`ros/`) — pending
-
-### Resolved: Fast-CDR ABI mismatch on Jazzy
-The system was **half-upgraded**: `ros-jazzy-fastcdr` was 2.2.5 (Jan) while
-newer packages (`derived_object_msgs` 4.0.0, `rosbridge_suite` 2.6.0, Apr builds)
-needed 2.2.7 → bridge/rosbridge crashed with `undefined symbol ...Cdr9serializeEj`.
-Fixed by a full `apt dist-upgrade` of the ROS 2 Jazzy stack to a consistent ABI
-(fastcdr 2.2.7) + clean rebuild of `carla-ros-ws`. `sensor.pseudo.objects`
-(derived_object_msgs) is back in `ros/objects_lite.json`.
-
-## License / origin
-
-Integration glue is MIT. Vendored references: `carla-simulator/ros-bridge`,
-`autowarefoundation/autoware`.
+🤖 Integration assembled with Claude Code.
