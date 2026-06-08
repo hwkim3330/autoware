@@ -47,7 +47,7 @@ live tablet demo used, but it is not the path for Autoware.
       (pre-reboot `nvidia-smi` shows "Driver/library version mismatch" — expected;
       the running kernel module is still 580 until reboot)
 - [x] CARLA 0.9.16 docker image pulled (`carlasim/carla:0.9.16`)
-- [ ] reboot → verify `nvidia-smi` = 535 → CARLA 0.9.16 renders (docker, headless)
+- [x] reboot done → driver 535 active; native CARLA 0.9.16 renders on RTX 3090 (6.8GB VRAM, world ready Town10HD). Docker CARLA image too old (U18.04 Vulkan loader) for 535 ICD → use NATIVE 0.9.16.
 - [ ] autoware_carla_interface bring-up + Town01 map
 - [ ] closed loop + tablet app (ros/carla_ws_gateway.py)
 
