@@ -25,7 +25,25 @@ fi
 # Force software Vulkan (lavapipe) as the ONLY physical device.
 # BOTH variables are required — VK_ICD_FILENAMES alone still lets the
 # loader enumerate the Intel iGPU, which UE4 then picks and crashes on.
-LVP_ICD=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+#
+# Newer mesa ships lvp_icd.json with a RELATIVE library_path
+# ("libvulkan_lvp.so"); inside CARLA's process the loader fails to resolve it
+# ("Found no drivers"). So we synthesize an ICD manifest with the ABSOLUTE
+# library path, which works regardless of mesa version.
+LVP_LIB=$(ldconfig -p 2>/dev/null | awk '/libvulkan_lvp\.so/{print $NF; exit}')
+[ -z "$LVP_LIB" ] && LVP_LIB=/usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+if [ ! -f "$LVP_LIB" ]; then
+  echo "lavapipe library not found — install mesa-vulkan-drivers"
+  exit 1
+fi
+SRC_ICD=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -1)
+APIVER=$(grep -oP '"api_version"\s*:\s*"\K[^"]+' "$SRC_ICD" 2>/dev/null)
+[ -z "$APIVER" ] && APIVER="1.3.275"
+LVP_ICD=$(mktemp /tmp/lvp_icd_abs.XXXX.json)
+cat > "$LVP_ICD" <<JSON
+{ "ICD": { "api_version": "$APIVER", "library_path": "$LVP_LIB" },
+  "file_format_version": "1.0.1" }
+JSON
 export VK_ICD_FILENAMES="$LVP_ICD"
 export VK_DRIVER_FILES="$LVP_ICD"
 export VK_LOADER_LAYERS_DISABLE=VK_LAYER_NV_optimus

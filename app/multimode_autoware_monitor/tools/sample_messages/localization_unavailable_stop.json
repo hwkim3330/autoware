@@ -1,0 +1,147 @@
+{
+  "timestamp": "2026-06-05T10:42:31.000Z",
+  "source": "WIFI",
+  "scenario": {
+    "id": "scenario_localization_unavailable_stop_007",
+    "name": "Localization Unavailable",
+    "environment": "CARLA Town03 (sensor blackout)",
+    "drivingArea": "URBAN"
+  },
+  "stateMachine": {
+    "stateId": "S6_LOCALIZATION_UNAVAILABLE_STOP",
+    "displayName": "Localization Unavailable \u2014 Safe Stop",
+    "previousStateId": "S5_SINGLE_SENSOR_FALLBACK",
+    "transitionStatus": "COMPLETED",
+    "transitionReason": "No usable absolute localization sensor"
+  },
+  "localization": {
+    "mode": "UNAVAILABLE",
+    "pipelineType": "UNAVAILABLE",
+    "absoluteSensors": [],
+    "relativeSensors": [
+      "IMU",
+      "Odometry"
+    ],
+    "fusionMethod": "-",
+    "fusionWeights": {
+      "lidar": 0.0,
+      "gnss": 0.0,
+      "camera": 0.0
+    },
+    "confidence": 0.0,
+    "latencyMs": 0.0
+  },
+  "sensors": {
+    "lidar": {
+      "status": "FAULT",
+      "used": false,
+      "role": "UNUSED",
+      "reason": "Sensor failure"
+    },
+    "gnss": {
+      "status": "FAULT",
+      "used": false,
+      "role": "UNUSED",
+      "reason": "No fix"
+    },
+    "camera": {
+      "status": "FAULT",
+      "used": false,
+      "role": "UNUSED",
+      "reason": "Sensor failure"
+    },
+    "imu": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "SUPPORT",
+      "reason": "Dead-reckoning only"
+    },
+    "odometry": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "RELATIVE_LOCALIZATION",
+      "reason": ""
+    }
+  },
+  "autoware": {
+    "selectedStack": "FALLBACK_STOP_STACK",
+    "stackReason": "Localization unavailable \u2014 minimal risk maneuver",
+    "modules": {
+      "sensing": "LIMITED",
+      "localization": "ERROR",
+      "perception": "STOPPED",
+      "planning": "LIMITED",
+      "control": "RUNNING",
+      "map": "STOPPED",
+      "vehicleInterface": "RUNNING"
+    },
+    "excludedModules": [
+      "lidar_localization",
+      "gnss_poser",
+      "camera_localization",
+      "object_recognition"
+    ]
+  },
+  "roiiArchitecture": {
+    "hpc": "NORMAL",
+    "backbone": {
+      "primary10G": "DEGRADED",
+      "secondary10G": "RECOVERING"
+    },
+    "zones": {
+      "frontLeft": "FAULT",
+      "frontRight": "FAULT",
+      "rear": "DEGRADED"
+    },
+    "sensorMap": {
+      "frontLeft": [
+        "LiDAR-FL",
+        "LiDAR-FC",
+        "Cam-FL",
+        "Cam-SL1",
+        "Cam-SL2",
+        "Radar-FL"
+      ],
+      "frontRight": [
+        "LiDAR-FR",
+        "Cam-FC",
+        "Cam-FR",
+        "Cam-SR1",
+        "Cam-SR2",
+        "Radar-FC",
+        "Radar-FR"
+      ],
+      "rear": [
+        "LiDAR-RC",
+        "Cam-RC",
+        "Radar-RL",
+        "Radar-RR"
+      ]
+    },
+    "dataFlowStatus": "FAULT"
+  },
+  "metrics": {
+    "cpuUsagePercent": 33,
+    "gpuUsagePercent": 10,
+    "memoryUsagePercent": 48,
+    "endToEndLatencyMs": 120,
+    "localizationLatencyMs": 0.0,
+    "modeTransitionTimeMs": 280,
+    "architectureReconfigurationTimeMs": 1500,
+    "trajectoryError": 0.0,
+    "resourceSavingPercent": 0.0,
+    "safetyState": "SAFE_STOP_REQUIRED"
+  },
+  "events": [
+    {
+      "timestamp": "10:42:25",
+      "level": "ERROR",
+      "message": "Localization unavailable"
+    },
+    {
+      "timestamp": "10:42:25",
+      "level": "ERROR",
+      "message": "Safe stop required"
+    }
+  ]
+}

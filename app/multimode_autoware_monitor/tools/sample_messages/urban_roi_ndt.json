@@ -1,0 +1,145 @@
+{
+  "timestamp": "2026-06-05T10:42:31.000Z",
+  "source": "WIFI",
+  "scenario": {
+    "id": "scenario_urban_roi_ndt_002",
+    "name": "Urban RoI-NDT",
+    "environment": "CARLA Town05",
+    "drivingArea": "URBAN"
+  },
+  "stateMachine": {
+    "stateId": "S2_URBAN_ROI_NDT",
+    "displayName": "Urban RoI-NDT",
+    "previousStateId": "S1_NORMAL_FULL_STACK",
+    "transitionStatus": "COMPLETED",
+    "transitionReason": "Dense urban map \u2014 LiDAR RoI-NDT preferred"
+  },
+  "localization": {
+    "mode": "LIDAR_GNSS",
+    "pipelineType": "DUAL",
+    "absoluteSensors": [
+      "LiDAR",
+      "GNSS"
+    ],
+    "relativeSensors": [
+      "IMU",
+      "Odometry"
+    ],
+    "fusionMethod": "RoI-NDT + GNSS assist",
+    "fusionWeights": {
+      "lidar": 0.8,
+      "gnss": 0.2,
+      "camera": 0.0
+    },
+    "confidence": 0.95,
+    "latencyMs": 45.0
+  },
+  "sensors": {
+    "lidar": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "ABSOLUTE_LOCALIZATION",
+      "reason": ""
+    },
+    "gnss": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "ABSOLUTE_LOCALIZATION",
+      "reason": ""
+    },
+    "camera": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "PERCEPTION",
+      "reason": ""
+    },
+    "imu": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "SUPPORT",
+      "reason": ""
+    },
+    "odometry": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "RELATIVE_LOCALIZATION",
+      "reason": ""
+    }
+  },
+  "autoware": {
+    "selectedStack": "ROI_NDT_URBAN_STACK",
+    "stackReason": "Urban driving \u2014 region-of-interest NDT localization",
+    "modules": {
+      "sensing": "RUNNING",
+      "localization": "RUNNING",
+      "perception": "RUNNING",
+      "planning": "RUNNING",
+      "control": "RUNNING",
+      "map": "RUNNING",
+      "vehicleInterface": "RUNNING"
+    },
+    "excludedModules": []
+  },
+  "roiiArchitecture": {
+    "hpc": "NORMAL",
+    "backbone": {
+      "primary10G": "NORMAL",
+      "secondary10G": "STANDBY"
+    },
+    "zones": {
+      "frontLeft": "NORMAL",
+      "frontRight": "NORMAL",
+      "rear": "NORMAL"
+    },
+    "sensorMap": {
+      "frontLeft": [
+        "LiDAR-FL",
+        "LiDAR-FC",
+        "Cam-FL",
+        "Cam-SL1",
+        "Cam-SL2",
+        "Radar-FL"
+      ],
+      "frontRight": [
+        "LiDAR-FR",
+        "Cam-FC",
+        "Cam-FR",
+        "Cam-SR1",
+        "Cam-SR2",
+        "Radar-FC",
+        "Radar-FR"
+      ],
+      "rear": [
+        "LiDAR-RC",
+        "Cam-RC",
+        "Radar-RL",
+        "Radar-RR"
+      ]
+    },
+    "dataFlowStatus": "NORMAL"
+  },
+  "metrics": {
+    "cpuUsagePercent": 64,
+    "gpuUsagePercent": 55,
+    "memoryUsagePercent": 66,
+    "endToEndLatencyMs": 172,
+    "localizationLatencyMs": 45.0,
+    "modeTransitionTimeMs": 410,
+    "architectureReconfigurationTimeMs": 0,
+    "trajectoryError": 0.028,
+    "resourceSavingPercent": 8.0,
+    "safetyState": "SAFE"
+  },
+  "events": [
+    {
+      "timestamp": "10:42:05",
+      "level": "INFO",
+      "message": "Entered dense urban area"
+    },
+    {
+      "timestamp": "10:42:05",
+      "level": "SUCCESS",
+      "message": "Stack: ROI_NDT_URBAN_STACK"
+    }
+  ]
+}

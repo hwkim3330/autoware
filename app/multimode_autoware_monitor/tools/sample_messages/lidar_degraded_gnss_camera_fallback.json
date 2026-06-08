@@ -1,0 +1,147 @@
+{
+  "timestamp": "2026-06-05T10:42:31.000Z",
+  "source": "WIFI",
+  "scenario": {
+    "id": "scenario_lidar_degraded_gnss_camera_fallback_006",
+    "name": "LiDAR Degraded -> GNSS/Camera Fallback",
+    "environment": "CARLA Town06 (rain)",
+    "drivingArea": "SUBURBAN"
+  },
+  "stateMachine": {
+    "stateId": "S4_DUAL_SENSOR_FUSION",
+    "displayName": "Dual Sensor Fusion",
+    "previousStateId": "S1_NORMAL_FULL_STACK",
+    "transitionStatus": "COMPLETED",
+    "transitionReason": "LiDAR degraded \u2014 switch to GNSS + Camera"
+  },
+  "localization": {
+    "mode": "GNSS_CAMERA",
+    "pipelineType": "DUAL",
+    "absoluteSensors": [
+      "GNSS",
+      "Camera"
+    ],
+    "relativeSensors": [
+      "IMU",
+      "Odometry"
+    ],
+    "fusionMethod": "GNSS + Visual SLAM",
+    "fusionWeights": {
+      "lidar": 0.0,
+      "gnss": 0.5,
+      "camera": 0.5
+    },
+    "confidence": 0.81,
+    "latencyMs": 51.0
+  },
+  "sensors": {
+    "lidar": {
+      "status": "DEGRADED",
+      "used": false,
+      "role": "UNUSED",
+      "reason": "Heavy rain \u2014 point cloud noisy"
+    },
+    "gnss": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "ABSOLUTE_LOCALIZATION",
+      "reason": ""
+    },
+    "camera": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "ABSOLUTE_LOCALIZATION",
+      "reason": ""
+    },
+    "imu": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "SUPPORT",
+      "reason": ""
+    },
+    "odometry": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "RELATIVE_LOCALIZATION",
+      "reason": ""
+    }
+  },
+  "autoware": {
+    "selectedStack": "DUAL_GNSS_CAMERA_STACK",
+    "stackReason": "LiDAR unreliable in rain \u2014 GNSS + Camera fusion",
+    "modules": {
+      "sensing": "RUNNING",
+      "localization": "RUNNING",
+      "perception": "LIMITED",
+      "planning": "RUNNING",
+      "control": "RUNNING",
+      "map": "RUNNING",
+      "vehicleInterface": "RUNNING"
+    },
+    "excludedModules": [
+      "lidar_ndt_scan_matcher"
+    ]
+  },
+  "roiiArchitecture": {
+    "hpc": "NORMAL",
+    "backbone": {
+      "primary10G": "NORMAL",
+      "secondary10G": "NORMAL"
+    },
+    "zones": {
+      "frontLeft": "DEGRADED",
+      "frontRight": "NORMAL",
+      "rear": "NORMAL"
+    },
+    "sensorMap": {
+      "frontLeft": [
+        "LiDAR-FL",
+        "LiDAR-FC",
+        "Cam-FL",
+        "Cam-SL1",
+        "Cam-SL2",
+        "Radar-FL"
+      ],
+      "frontRight": [
+        "LiDAR-FR",
+        "Cam-FC",
+        "Cam-FR",
+        "Cam-SR1",
+        "Cam-SR2",
+        "Radar-FC",
+        "Radar-FR"
+      ],
+      "rear": [
+        "LiDAR-RC",
+        "Cam-RC",
+        "Radar-RL",
+        "Radar-RR"
+      ]
+    },
+    "dataFlowStatus": "DEGRADED"
+  },
+  "metrics": {
+    "cpuUsagePercent": 55,
+    "gpuUsagePercent": 50,
+    "memoryUsagePercent": 65,
+    "endToEndLatencyMs": 205,
+    "localizationLatencyMs": 51.0,
+    "modeTransitionTimeMs": 640,
+    "architectureReconfigurationTimeMs": 1100,
+    "trajectoryError": 0.073,
+    "resourceSavingPercent": 12.0,
+    "safetyState": "LIMITED_DRIVE"
+  },
+  "events": [
+    {
+      "timestamp": "10:42:21",
+      "level": "WARNING",
+      "message": "LiDAR degraded"
+    },
+    {
+      "timestamp": "10:42:22",
+      "level": "SUCCESS",
+      "message": "GNSS + Camera localization selected"
+    }
+  ]
+}

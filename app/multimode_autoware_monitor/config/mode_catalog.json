@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "note": "MVP default 6-State driving state machine. Rename/extend freely — the app reads names from here, nothing is hardcoded.",
+  "states": [
+    {
+      "stateId": "S1_NORMAL_FULL_STACK",
+      "displayName": "Normal Full Stack",
+      "description": "All primary localization sensors healthy; full triple fusion and full Autoware stack.",
+      "requiredSensorCombination": "LIDAR_GNSS_CAMERA",
+      "selectedStack": "TRIPLE_FUSION_STACK",
+      "allowedTransitionTargets": [
+        "S2_URBAN_ROI_NDT",
+        "S3_RURAL_MINIMUM",
+        "S4_DUAL_SENSOR_FUSION",
+        "S5_SINGLE_SENSOR_FALLBACK",
+        "S6_LOCALIZATION_UNAVAILABLE_STOP"
+      ],
+      "safetyLevel": "SAFE",
+      "defaultColor": "green"
+    },
+    {
+      "stateId": "S2_URBAN_ROI_NDT",
+      "displayName": "Urban RoI-NDT",
+      "description": "Dense urban driving using region-of-interest NDT LiDAR localization with GNSS assist.",
+      "requiredSensorCombination": "LIDAR_GNSS",
+      "selectedStack": "ROI_NDT_URBAN_STACK",
+      "allowedTransitionTargets": [
+        "S1_NORMAL_FULL_STACK",
+        "S4_DUAL_SENSOR_FUSION",
+        "S5_SINGLE_SENSOR_FALLBACK",
+        "S6_LOCALIZATION_UNAVAILABLE_STOP"
+      ],
+      "safetyLevel": "SAFE",
+      "defaultColor": "green"
+    },
+    {
+      "stateId": "S3_RURAL_MINIMUM",
+      "displayName": "Rural Minimum",
+      "description": "Open/simple roads using a minimum Autoware stack to save compute.",
+      "requiredSensorCombination": "GNSS_CAMERA",
+      "selectedStack": "MINIMUM_RURAL_STACK",
+      "allowedTransitionTargets": [
+        "S1_NORMAL_FULL_STACK",
+        "S2_URBAN_ROI_NDT",
+        "S5_SINGLE_SENSOR_FALLBACK",
+        "S6_LOCALIZATION_UNAVAILABLE_STOP"
+      ],
+      "safetyLevel": "LIMITED_DRIVE",
+      "defaultColor": "amber"
+    },
+    {
+      "stateId": "S4_DUAL_SENSOR_FUSION",
+      "displayName": "Dual Sensor Fusion",
+      "description": "Two single-sensor localization pipelines fused together (e.g. LiDAR + GNSS).",
+      "requiredSensorCombination": "LIDAR_GNSS",
+      "selectedStack": "DUAL_LIDAR_GNSS_STACK",
+      "allowedTransitionTargets": [
+        "S1_NORMAL_FULL_STACK",
+        "S5_SINGLE_SENSOR_FALLBACK",
+        "S6_LOCALIZATION_UNAVAILABLE_STOP"
+      ],
+      "safetyLevel": "SAFE",
+      "defaultColor": "green"
+    },
+    {
+      "stateId": "S5_SINGLE_SENSOR_FALLBACK",
+      "displayName": "Single Sensor Fallback",
+      "description": "One absolute sensor lost; localization falls back to a single absolute + relative sensor.",
+      "requiredSensorCombination": "LIDAR_ONLY",
+      "selectedStack": "LIDAR_LOCALIZATION_STACK",
+      "allowedTransitionTargets": [
+        "S4_DUAL_SENSOR_FUSION",
+        "S6_LOCALIZATION_UNAVAILABLE_STOP"
+      ],
+      "safetyLevel": "LIMITED_DRIVE",
+      "defaultColor": "amber"
+    },
+    {
+      "stateId": "S6_LOCALIZATION_UNAVAILABLE_STOP",
+      "displayName": "Localization Unavailable — Safe Stop",
+      "description": "No usable absolute localization; minimal risk maneuver / safe stop.",
+      "requiredSensorCombination": "UNAVAILABLE",
+      "selectedStack": "FALLBACK_STOP_STACK",
+      "allowedTransitionTargets": [
+        "S5_SINGLE_SENSOR_FALLBACK"
+      ],
+      "safetyLevel": "SAFE_STOP_REQUIRED",
+      "defaultColor": "red"
+    }
+  ]
+}

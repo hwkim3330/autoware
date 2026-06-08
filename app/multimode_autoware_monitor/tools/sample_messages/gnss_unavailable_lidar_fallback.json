@@ -1,0 +1,145 @@
+{
+  "timestamp": "2026-06-05T10:42:31.000Z",
+  "source": "WIFI",
+  "scenario": {
+    "id": "scenario_gnss_unavailable_lidar_fallback_005",
+    "name": "GNSS Unavailable -> LiDAR Fallback",
+    "environment": "CARLA Town03 (tunnel)",
+    "drivingArea": "URBAN"
+  },
+  "stateMachine": {
+    "stateId": "S5_SINGLE_SENSOR_FALLBACK",
+    "displayName": "Single Sensor Fallback",
+    "previousStateId": "S4_DUAL_SENSOR_FUSION",
+    "transitionStatus": "COMPLETED",
+    "transitionReason": "GNSS unavailable"
+  },
+  "localization": {
+    "mode": "LIDAR_ONLY",
+    "pipelineType": "SINGLE",
+    "absoluteSensors": [
+      "LiDAR"
+    ],
+    "relativeSensors": [
+      "Odometry"
+    ],
+    "fusionMethod": "NDT + Odometry",
+    "fusionWeights": {
+      "lidar": 1.0,
+      "gnss": 0.0,
+      "camera": 0.0
+    },
+    "confidence": 0.84,
+    "latencyMs": 49.0
+  },
+  "sensors": {
+    "lidar": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "ABSOLUTE_LOCALIZATION",
+      "reason": ""
+    },
+    "gnss": {
+      "status": "FAULT",
+      "used": false,
+      "role": "UNUSED",
+      "reason": "GNSS signal lost (tunnel)"
+    },
+    "camera": {
+      "status": "NORMAL",
+      "used": false,
+      "role": "PERCEPTION",
+      "reason": ""
+    },
+    "imu": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "SUPPORT",
+      "reason": ""
+    },
+    "odometry": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "RELATIVE_LOCALIZATION",
+      "reason": ""
+    }
+  },
+  "autoware": {
+    "selectedStack": "LIDAR_LOCALIZATION_STACK",
+    "stackReason": "GNSS lost \u2014 LiDAR + Odometry localization only",
+    "modules": {
+      "sensing": "RUNNING",
+      "localization": "RUNNING",
+      "perception": "RUNNING",
+      "planning": "RUNNING",
+      "control": "RUNNING",
+      "map": "RUNNING",
+      "vehicleInterface": "RUNNING"
+    },
+    "excludedModules": [
+      "gnss_poser"
+    ]
+  },
+  "roiiArchitecture": {
+    "hpc": "NORMAL",
+    "backbone": {
+      "primary10G": "NORMAL",
+      "secondary10G": "STANDBY"
+    },
+    "zones": {
+      "frontLeft": "NORMAL",
+      "frontRight": "NORMAL",
+      "rear": "NORMAL"
+    },
+    "sensorMap": {
+      "frontLeft": [
+        "LiDAR-FL",
+        "LiDAR-FC",
+        "Cam-FL",
+        "Cam-SL1",
+        "Cam-SL2",
+        "Radar-FL"
+      ],
+      "frontRight": [
+        "LiDAR-FR",
+        "Cam-FC",
+        "Cam-FR",
+        "Cam-SR1",
+        "Cam-SR2",
+        "Radar-FC",
+        "Radar-FR"
+      ],
+      "rear": [
+        "LiDAR-RC",
+        "Cam-RC",
+        "Radar-RL",
+        "Radar-RR"
+      ]
+    },
+    "dataFlowStatus": "NORMAL"
+  },
+  "metrics": {
+    "cpuUsagePercent": 60,
+    "gpuUsagePercent": 47,
+    "memoryUsagePercent": 68,
+    "endToEndLatencyMs": 198,
+    "localizationLatencyMs": 49.0,
+    "modeTransitionTimeMs": 305,
+    "architectureReconfigurationTimeMs": 0,
+    "trajectoryError": 0.061,
+    "resourceSavingPercent": 5.0,
+    "safetyState": "LIMITED_DRIVE"
+  },
+  "events": [
+    {
+      "timestamp": "10:42:17",
+      "level": "WARNING",
+      "message": "GNSS signal lost"
+    },
+    {
+      "timestamp": "10:42:17",
+      "level": "SUCCESS",
+      "message": "Localization pipeline switched to LiDAR + Odometry"
+    }
+  ]
+}

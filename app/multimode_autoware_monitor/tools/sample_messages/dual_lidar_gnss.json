@@ -1,0 +1,144 @@
+{
+  "timestamp": "2026-06-05T10:42:31.000Z",
+  "source": "WIFI",
+  "scenario": {
+    "id": "scenario_dual_lidar_gnss_004",
+    "name": "Dual LiDAR-GNSS Fusion",
+    "environment": "CARLA Town04",
+    "drivingArea": "URBAN"
+  },
+  "stateMachine": {
+    "stateId": "S4_DUAL_SENSOR_FUSION",
+    "displayName": "Dual Sensor Fusion",
+    "previousStateId": "S1_NORMAL_FULL_STACK",
+    "transitionStatus": "COMPLETED",
+    "transitionReason": "LiDAR and GNSS pipelines are both available"
+  },
+  "localization": {
+    "mode": "LIDAR_GNSS",
+    "pipelineType": "DUAL",
+    "absoluteSensors": [
+      "LiDAR",
+      "GNSS"
+    ],
+    "relativeSensors": [
+      "Odometry"
+    ],
+    "fusionMethod": "KalmanFilter",
+    "fusionWeights": {
+      "lidar": 0.5,
+      "gnss": 0.5,
+      "camera": 0.0
+    },
+    "confidence": 0.93,
+    "latencyMs": 42.5
+  },
+  "sensors": {
+    "lidar": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "ABSOLUTE_LOCALIZATION",
+      "reason": ""
+    },
+    "gnss": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "ABSOLUTE_LOCALIZATION",
+      "reason": ""
+    },
+    "camera": {
+      "status": "NORMAL",
+      "used": false,
+      "role": "PERCEPTION",
+      "reason": "Not selected for current localization mode"
+    },
+    "imu": {
+      "status": "NORMAL",
+      "used": false,
+      "role": "SUPPORT",
+      "reason": ""
+    },
+    "odometry": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "RELATIVE_LOCALIZATION",
+      "reason": ""
+    }
+  },
+  "autoware": {
+    "selectedStack": "DUAL_LIDAR_GNSS_STACK",
+    "stackReason": "Dual localization fusion selected for stable urban driving",
+    "modules": {
+      "sensing": "RUNNING",
+      "localization": "RUNNING",
+      "perception": "RUNNING",
+      "planning": "RUNNING",
+      "control": "RUNNING",
+      "map": "RUNNING",
+      "vehicleInterface": "RUNNING"
+    },
+    "excludedModules": []
+  },
+  "roiiArchitecture": {
+    "hpc": "NORMAL",
+    "backbone": {
+      "primary10G": "NORMAL",
+      "secondary10G": "STANDBY"
+    },
+    "zones": {
+      "frontLeft": "NORMAL",
+      "frontRight": "NORMAL",
+      "rear": "NORMAL"
+    },
+    "sensorMap": {
+      "frontLeft": [
+        "LiDAR-FL",
+        "LiDAR-FC",
+        "Cam-FL",
+        "Cam-SL1",
+        "Cam-SL2",
+        "Radar-FL"
+      ],
+      "frontRight": [
+        "LiDAR-FR",
+        "Cam-FC",
+        "Cam-FR",
+        "Cam-SR1",
+        "Cam-SR2",
+        "Radar-FC",
+        "Radar-FR"
+      ],
+      "rear": [
+        "LiDAR-RC",
+        "Cam-RC",
+        "Radar-RL",
+        "Radar-RR"
+      ]
+    },
+    "dataFlowStatus": "NORMAL"
+  },
+  "metrics": {
+    "cpuUsagePercent": 58,
+    "gpuUsagePercent": 44,
+    "memoryUsagePercent": 67,
+    "endToEndLatencyMs": 185,
+    "localizationLatencyMs": 42.5,
+    "modeTransitionTimeMs": 512,
+    "architectureReconfigurationTimeMs": 1220,
+    "trajectoryError": 0.032,
+    "resourceSavingPercent": 18.5,
+    "safetyState": "SAFE"
+  },
+  "events": [
+    {
+      "timestamp": "10:42:21",
+      "level": "INFO",
+      "message": "Dual LiDAR-GNSS localization fusion active"
+    },
+    {
+      "timestamp": "10:42:22",
+      "level": "SUCCESS",
+      "message": "Autoware stack selected: DUAL_LIDAR_GNSS_STACK"
+    }
+  ]
+}

@@ -1,0 +1,147 @@
+{
+  "timestamp": "2026-06-05T10:42:31.000Z",
+  "source": "WIFI",
+  "scenario": {
+    "id": "scenario_rural_minimum_003",
+    "name": "Rural Minimum Stack",
+    "environment": "CARLA Town07",
+    "drivingArea": "RURAL"
+  },
+  "stateMachine": {
+    "stateId": "S3_RURAL_MINIMUM",
+    "displayName": "Rural Minimum",
+    "previousStateId": "S2_URBAN_ROI_NDT",
+    "transitionStatus": "COMPLETED",
+    "transitionReason": "Open rural road \u2014 minimum stack to save resources"
+  },
+  "localization": {
+    "mode": "GNSS_CAMERA",
+    "pipelineType": "DUAL",
+    "absoluteSensors": [
+      "GNSS",
+      "Camera"
+    ],
+    "relativeSensors": [
+      "Odometry"
+    ],
+    "fusionMethod": "GNSS + visual lane",
+    "fusionWeights": {
+      "lidar": 0.0,
+      "gnss": 0.6,
+      "camera": 0.4
+    },
+    "confidence": 0.88,
+    "latencyMs": 33.0
+  },
+  "sensors": {
+    "lidar": {
+      "status": "STANDBY",
+      "used": false,
+      "role": "UNUSED",
+      "reason": "Not needed on open road"
+    },
+    "gnss": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "ABSOLUTE_LOCALIZATION",
+      "reason": ""
+    },
+    "camera": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "ABSOLUTE_LOCALIZATION",
+      "reason": ""
+    },
+    "imu": {
+      "status": "NORMAL",
+      "used": false,
+      "role": "SUPPORT",
+      "reason": ""
+    },
+    "odometry": {
+      "status": "NORMAL",
+      "used": true,
+      "role": "RELATIVE_LOCALIZATION",
+      "reason": ""
+    }
+  },
+  "autoware": {
+    "selectedStack": "MINIMUM_RURAL_STACK",
+    "stackReason": "Sparse environment \u2014 reduced perception/planning load",
+    "modules": {
+      "sensing": "RUNNING",
+      "localization": "RUNNING",
+      "perception": "LIMITED",
+      "planning": "LIMITED",
+      "control": "RUNNING",
+      "map": "LIMITED",
+      "vehicleInterface": "RUNNING"
+    },
+    "excludedModules": [
+      "heavy_object_tracking",
+      "traffic_light_recognition"
+    ]
+  },
+  "roiiArchitecture": {
+    "hpc": "NORMAL",
+    "backbone": {
+      "primary10G": "NORMAL",
+      "secondary10G": "STANDBY"
+    },
+    "zones": {
+      "frontLeft": "NORMAL",
+      "frontRight": "NORMAL",
+      "rear": "NORMAL"
+    },
+    "sensorMap": {
+      "frontLeft": [
+        "LiDAR-FL",
+        "LiDAR-FC",
+        "Cam-FL",
+        "Cam-SL1",
+        "Cam-SL2",
+        "Radar-FL"
+      ],
+      "frontRight": [
+        "LiDAR-FR",
+        "Cam-FC",
+        "Cam-FR",
+        "Cam-SR1",
+        "Cam-SR2",
+        "Radar-FC",
+        "Radar-FR"
+      ],
+      "rear": [
+        "LiDAR-RC",
+        "Cam-RC",
+        "Radar-RL",
+        "Radar-RR"
+      ]
+    },
+    "dataFlowStatus": "NORMAL"
+  },
+  "metrics": {
+    "cpuUsagePercent": 41,
+    "gpuUsagePercent": 28,
+    "memoryUsagePercent": 52,
+    "endToEndLatencyMs": 140,
+    "localizationLatencyMs": 33.0,
+    "modeTransitionTimeMs": 520,
+    "architectureReconfigurationTimeMs": 900,
+    "trajectoryError": 0.044,
+    "resourceSavingPercent": 31.0,
+    "safetyState": "LIMITED_DRIVE"
+  },
+  "events": [
+    {
+      "timestamp": "10:42:09",
+      "level": "INFO",
+      "message": "Rural area detected"
+    },
+    {
+      "timestamp": "10:42:09",
+      "level": "SUCCESS",
+      "message": "Minimum rural stack \u2014 CPU load reduced"
+    }
+  ]
+}

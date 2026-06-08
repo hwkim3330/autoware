@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "note": "ROii vehicle visualization topology. Edit zones/sensors freely.",
+  "hpc": "ACU_IT / HPC",
+  "backbone": "10G Backbone",
+  "zones": [
+    {
+      "id": "frontLeft",
+      "displayName": "Front-L Zone Controller",
+      "sensors": ["LiDAR-FL", "LiDAR-FC", "Cam-FL", "Cam-SL1", "Cam-SL2", "Radar-FL"]
+    },
+    {
+      "id": "frontRight",
+      "displayName": "Front-R Zone Controller",
+      "sensors": ["LiDAR-FR", "Cam-FC", "Cam-FR", "Cam-SR1", "Cam-SR2", "Radar-FC", "Radar-FR"]
+    },
+    {
+      "id": "rear",
+      "displayName": "Rear Zone Controller",
+      "sensors": ["LiDAR-RC", "Cam-RC", "Radar-RL", "Radar-RR"]
+    }
+  ]
+}

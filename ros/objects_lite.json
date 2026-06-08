@@ -5,15 +5,6 @@
       "id": "ego_vehicle",
       "sensors": [
         {
-          "type": "sensor.camera.rgb",
-          "id": "rgb_front",
-          "spawn_point": { "x": 1.5, "y": 0.0, "z": 1.6, "roll": 0.0, "pitch": 0.0, "yaw": 0.0 },
-          "image_size_x": 400,
-          "image_size_y": 300,
-          "fov": 90.0,
-          "sensor_tick": 0.5
-        },
-        {
           "type": "sensor.lidar.ray_cast",
           "id": "lidar",
           "spawn_point": { "x": 0.0, "y": 0.0, "z": 2.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0 },
