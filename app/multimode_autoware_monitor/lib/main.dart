@@ -57,7 +57,11 @@ class _AppShellState extends State<AppShell> {
   @override
   void initState() {
     super.initState();
-    _service = MockMonitoringService();
+    // Honor the configured default data source on first launch.
+    _service = (_mode == ConnectionMode.demo)
+        ? MockMonitoringService()
+        : WebSocketMonitoringService(
+            url: AppConfig.urlForMode(_mode, _customUrl), mode: _mode);
     _service.start();
   }
 
