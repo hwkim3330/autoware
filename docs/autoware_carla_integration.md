@@ -58,3 +58,22 @@ CARLA 0.9.x (UE4.26 / Vulkan) RenderThread-timeouts on NVIDIA **550/555/560+**
 `-opengl` is unavailable (Vulkan-only since 0.9.12). Newer driver = worse for UE4.26.
 → 535 (≈2023, supports RTX 3090) is the compatible target. Refs: carla issues
 #8043, #8079, #9502, #1456.
+
+## STABILITY: unexpected reboot under load — root cause = `watchdog` daemon
+Symptom: the box rebooted ~44 min into running CARLA + the full 181-node Autoware
+stack. **Not hardware** — the journal showed a clean SIGTERM shutdown, no Xid/MCE/
+thermal/OOM. Culprit (journalctl -b -1):
+```
+watchdog[]: loadavg 59 21 9 is higher than the given threshold 36 28 20!
+watchdog[]: shutting down the system because of error 253 = 'load average too high'
+systemd[1]: Received SIGTERM from PID  (watchdog).
+```
+The `watchdog` package was configured (`/etc/watchdog.conf`) with `max-load-1=36`
+and reboots when load exceeds it. 16-core box, full Autoware legitimately hits
+load ~59 → watchdog misreads it as a hang and reboots.
+**Fix:** `sudo systemctl disable --now watchdog` and comment out the `max-load-*`
+lines in `/etc/watchdog.conf`. Done on this host.
+
+Also: `docker commit autoware autoware-ready` bakes the carla client + ~3.6GB ML
+artifacts into a reusable image so a container loss doesn't require re-downloading.
+`scripts/start_autoware.sh` defaults to the `autoware-ready` image.
