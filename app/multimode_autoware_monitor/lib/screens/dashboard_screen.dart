@@ -6,8 +6,8 @@ import '../services/monitoring_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/event_timeline.dart';
 import '../widgets/localization_mode_card.dart';
-import '../widgets/status_badge.dart';
 import '../widgets/summary_card.dart';
+import '../widgets/vehicle_visualizer.dart';
 import 'screen_header.dart';
 
 String safetyLabel(SafetyState s) => s.name
@@ -25,53 +25,47 @@ class DashboardScreen extends StatelessWidget {
       service: service,
       builder: (context, data) {
         final loc = data.localization;
-        final safetyColor = StatusColors.safety(data.metrics.safetyState);
         final m = data.metrics;
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            // ---- 4 hero values ----
+            // ---- vehicle visualization + hero values (wide) ----
             LayoutBuilder(builder: (context, c) {
-              final cols = c.maxWidth > 900 ? 4 : 2;
-              return GridView.count(
-                crossAxisCount: cols,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                childAspectRatio: 2.4,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-                children: [
-                  HeroValueCard(
-                    label: 'CURRENT LOCALIZATION MODE',
-                    value: localizationModeLabel(loc.mode),
-                    color: loc.mode == LocalizationMode.unavailable
-                        ? StatusColors.red
-                        : StatusColors.green,
-                    subtitle: 'Pipeline: ${pipelineLabel(loc.pipelineType)}',
+              if (c.maxWidth >= 760) {
+                return SizedBox(
+                  height: 300,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Container(
+                        width: 230,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          gradient: const RadialGradient(radius: 0.9, colors: [
+                            Color(0xFF131A24),
+                            Color(0xFF0D1117),
+                          ]),
+                          border: Border.all(color: AppTheme.border),
+                        ),
+                        padding: const EdgeInsets.all(6),
+                        child: VehicleVisualizer(
+                            sensors: data.sensors, localization: loc),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(child: _heroGrid(data, 2)),
+                    ],
                   ),
-                  HeroValueCard(
-                    label: 'SENSOR COMBINATION',
-                    value: loc.absoluteSensors.isEmpty
-                        ? 'NONE'
-                        : loc.absoluteSensors.join(' + '),
-                    color: StatusColors.blue,
-                    subtitle: 'Relative: '
-                        '${loc.relativeSensors.isEmpty ? '-' : loc.relativeSensors.join(', ')}',
-                  ),
-                  HeroValueCard(
-                    label: 'SELECTED AUTOWARE STACK',
-                    value: data.autoware.selectedStack,
-                    color: StatusColors.amber,
-                    subtitle: data.stateMachine.stateId,
-                  ),
-                  HeroValueCard(
-                    label: 'SAFETY STATE',
-                    value: safetyLabel(data.metrics.safetyState),
-                    color: safetyColor,
-                    subtitle: data.scenario.drivingArea,
-                  ),
-                ],
-              );
+                );
+              }
+              return Column(children: [
+                SizedBox(
+                  height: 280,
+                  child: VehicleVisualizer(
+                      sensors: data.sensors, localization: loc),
+                ),
+                const SizedBox(height: 14),
+                _heroGrid(data, 2),
+              ]);
             }),
             const SizedBox(height: 14),
             // ---- transition reason + localization ----
@@ -130,6 +124,49 @@ class DashboardScreen extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+
+  Widget _heroGrid(MonitoringData data, int cols) {
+    final loc = data.localization;
+    return GridView.count(
+      crossAxisCount: cols,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      childAspectRatio: 2.3,
+      crossAxisSpacing: 12,
+      mainAxisSpacing: 12,
+      children: [
+        HeroValueCard(
+          label: 'CURRENT LOCALIZATION MODE',
+          value: localizationModeLabel(loc.mode),
+          color: loc.mode == LocalizationMode.unavailable
+              ? StatusColors.red
+              : StatusColors.green,
+          subtitle: 'Pipeline: ${pipelineLabel(loc.pipelineType)}',
+        ),
+        HeroValueCard(
+          label: 'SENSOR COMBINATION',
+          value: loc.absoluteSensors.isEmpty
+              ? 'NONE'
+              : loc.absoluteSensors.join(' + '),
+          color: StatusColors.blue,
+          subtitle:
+              'Relative: ${loc.relativeSensors.isEmpty ? '-' : loc.relativeSensors.join(', ')}',
+        ),
+        HeroValueCard(
+          label: 'SELECTED AUTOWARE STACK',
+          value: data.autoware.selectedStack,
+          color: StatusColors.amber,
+          subtitle: data.stateMachine.stateId,
+        ),
+        HeroValueCard(
+          label: 'SAFETY STATE',
+          value: safetyLabel(data.metrics.safetyState),
+          color: StatusColors.safety(data.metrics.safetyState),
+          subtitle: data.scenario.drivingArea,
+        ),
+      ],
     );
   }
 

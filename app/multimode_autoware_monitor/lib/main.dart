@@ -9,6 +9,7 @@ import 'services/websocket_monitoring_service.dart';
 import 'theme/app_theme.dart';
 
 import 'screens/dashboard_screen.dart';
+import 'screens/vehicle_screen.dart';
 import 'screens/localization_screen.dart';
 import 'screens/sensor_combination_screen.dart';
 import 'screens/autoware_stack_screen.dart';
@@ -88,6 +89,7 @@ class _AppShellState extends State<AppShell> {
 
   static const _dests = [
     (Icons.dashboard, 'Dashboard'),
+    (Icons.directions_car, 'Vehicle'),
     (Icons.my_location, 'Localization'),
     (Icons.sensors, 'Sensors'),
     (Icons.account_tree, 'Autoware'),
@@ -101,6 +103,7 @@ class _AppShellState extends State<AppShell> {
   Widget build(BuildContext context) {
     final screens = <Widget>[
       DashboardScreen(service: _service),
+      VehicleScreen(service: _service),
       LocalizationScreen(service: _service),
       SensorCombinationScreen(service: _service),
       AutowareStackScreen(service: _service),
