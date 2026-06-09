@@ -191,3 +191,30 @@ Run it with: `scripts/run_localization_demo.sh Town01`
   (set goal → engage autonomous → planning/control closed loop).
 - Visualization: rviz-in-container still contends for the GPU/display with
   CARLA; the Flutter tablet app via the WebSocket gateway is the reliable view.
+
+## Closed-loop status (after localization converged)
+
+Full stack confirmed up via a *persistent* rclpy probe (flaky one-shot ros2 CLI
+clients gave false "0 topics" — always probe with a node that stays in the graph
+long enough to discover): **157 nodes / 613 topics**, planning 8, control 10,
+localization 2, carla_interface 1. `/api/operation_mode/state`,
+`/api/routing/set_route_points`, `/planning/scenario_planning/trajectory` all
+present. Localization initialization_state = **3 (INITIALIZED)**, ego stable at
+map (228.3, -2.0), TF map->base_link converged.
+
+**rviz works** when launched inside the container against DISPLAY=:1 with
+`LIBGL_ALWAYS_SOFTWARE=1` (no GLXContext BadValue now that CARLA is
+-RenderOffScreen and not holding an X window). Caveat: software GL pushes host
+load to ~50 — for a smooth demo rviz wants hardware GL (the earlier GLX failure
+needs revisiting) or a second machine.
+
+**Autonomous driving is blocked by lanelet alignment, NOT by infra.**
+`/api/routing/set_route_points` returns *"The planned route is empty."* for goals
+30/60/90 m ahead of the ego, and `change_to_autonomous` returns *"target mode not
+available"*. Routing state stays UNSET → no trajectory → cannot engage. Cause:
+the CARLA ego spawn point / NDT-localized pose does not project onto a lane in the
+Town01 `lanelet2_map.osm` (classic CARLA↔Autoware map-frame / MGRS-origin
+mismatch, or an off-lane spawn point). Next step for a closed loop:
+- verify `lanelet2_map.osm` and `pointcloud_map.pcd` for Town01 share one origin,
+- spawn the ego on a lanelet centerline (set `spawn_point` to a known on-lane
+  pose) so the mission planner can find a start lane.
