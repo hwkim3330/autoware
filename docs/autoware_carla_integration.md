@@ -127,3 +127,67 @@ Remaining for a closed loop (needs an unsaturated environment):
    visualize via the tablet app instead.
 RECOMMENDED ARCHITECTURE: run CARLA and Autoware on TWO machines (the standard
 CARLA-Autoware setup), or a much higher-core box, so neither starves the other.
+
+---
+
+## BREAKTHROUGH — single box DOES work (localization closed on one machine)
+
+The "two machines required" conclusion above was **wrong**. The single
+16-core / RTX-3090 box runs CARLA 0.9.16 + Autoware localization together with
+the full sensing → NDT pipeline converging. Four fixes did it; see
+`scripts/run_localization_demo.sh` for the encoded recipe.
+
+### Root causes (each one was masking the next)
+
+1. **CARLA crashed during the Autoware start-up burst, not steady state.**
+   Steady-state load is a fine ~15–19; but launching ~100 Autoware nodes spikes
+   load to ~40 for a few seconds and CARLA's RPC server times out / the process
+   is starved. *Fix:* CPU partition — `taskset -c 0-5` for CARLA (+ `renice -10`),
+   `docker update --cpuset-cpus=6-15` for the Autoware container. The burst is
+   now confined to cores 6-15 and CARLA keeps 0-5 to itself. **Apply the
+   partition BEFORE launching Autoware** — once CARLA is already starved it is
+   too late.
+
+2. **Six RGB cameras segfaulted CARLA on sensor-attach (Signal 11).** The stock
+   `carla_sensor_kit` enables 6×(1600×900 @ 11 Hz) cameras. The instant
+   `autoware_carla_interface` attaches all six, CARLA's RenderOffScreen renderer
+   dies. With `perception:=false` the cameras are unused anyway. *Fix:*
+   `config/sensor_mapping_lidar_only.yaml` — LiDAR + IMU + GNSS only. After this
+   CARLA survived indefinitely and the interface reached its bridge tick loop.
+
+3. **The SHM error was a diagnostic red herring, not the bug.** Dozens of
+   `component_container` processes race on the same Fast-DDS SHM segment →
+   `Failed init_port fastrtps_port7411: open_and_lock_file failed`. The running
+   nodes tolerate it, but every *later-joining* `ros2 topic hz/echo` and
+   `tf2_echo` failed to join the graph → "topic not published yet" false
+   negatives that made it look like nothing was flowing. *Fix:*
+   `config/fastdds_udp.xml` (`FASTRTPS_DEFAULT_PROFILES_FILE`) forces UDPv4, no
+   SHM lock; diagnostics join reliably. NOT related to `--ipc=host`.
+
+4. **`client.load_world(Town01)` wedged a busy/contended CARLA → 120 s timeout,
+   killing the interface at `carla_autoware.py:82`.** On a *healthy* CARLA the
+   same call is ~2.7 s. *Fix:* boot CARLA first (default Town10HD), let the
+   interface reload Town01 on an unstarved server. Also: CARLA 0.9.16 boot is
+   intermittently flaky (Signal 11 on UE4.26 / driver 535) — retry the boot
+   until the RPC port stays up for ~15 s; never let stale interface clients
+   hammer the RPC port during boot (a full `docker restart autoware` is the
+   reliable way to clear orphaned ROS clients).
+
+### Verified result (one box, CARLA cores 0-5, Autoware 6-15)
+
+```
+/sensing/lidar/top/pointcloud_before_sync   7.7 Hz
+/sensing/lidar/concatenated/pointcloud      9.9 Hz
+/localization/util/downsample/pointcloud    9.8 Hz   <- NDT input (was empty)
+/localization/kinematic_state              19.0 Hz
+TF map -> base_link  [228.33, -2.03, -0.01]          <- localization CONVERGED
+```
+
+Run it with: `scripts/run_localization_demo.sh Town01`
+
+### Still open
+- AD-API topics (`/api/operation_mode/state`, `/api/routing/state`) were not
+  observed over the UDP client — confirm adapi is up before driving a goal pose
+  (set goal → engage autonomous → planning/control closed loop).
+- Visualization: rviz-in-container still contends for the GPU/display with
+  CARLA; the Flutter tablet app via the WebSocket gateway is the reliable view.

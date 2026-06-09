@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fast-DDS profile that DISABLES the shared-memory (SHM) transport and forces
+  UDPv4 for all participants.
+
+  Why: when Autoware brings up ~100 nodes at once inside one container, several
+  component_container processes race to lock the same SHM segment and fail with:
+      [RTPS_TRANSPORT_SHM Error] Failed init_port fastrtps_port7411:
+      open_and_lock_file failed
+  The running nodes tolerate it, but ANY later-joining client (ros2 topic echo /
+  hz / tf2_echo used for diagnostics) cannot join the DDS graph -> every query
+  returns "topic does not appear to be published yet" (false negative).
+
+  Forcing UDPv4 removes the SHM lock entirely. On localhost the throughput cost
+  is negligible for this workload and diagnostics work reliably.
+
+  Usage (inside the container, before ros2 launch AND for any ros2 CLI query):
+      export FASTRTPS_DEFAULT_PROFILES_FILE=/path/to/fastdds_udp.xml
+-->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <profiles>
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>udp_only</transport_id>
+        <type>UDPv4</type>
+      </transport_descriptor>
+    </transport_descriptors>
+    <participant profile_name="udp_participant" is_default_profile="true">
+      <rtps>
+        <userTransports>
+          <transport_id>udp_only</transport_id>
+        </userTransports>
+        <useBuiltinTransports>false</useBuiltinTransports>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>
