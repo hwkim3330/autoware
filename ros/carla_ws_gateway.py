@@ -179,9 +179,15 @@ def build_frame(world, ego, tick_ms):
 
 
 def ensure_ego(world):
-    for a in world.get_actors().filter("vehicle.*"):
-        if a.attributes.get("role_name") == "hero":
-            return a
+    # Prefer an existing ego (e.g. spawned by autoware_carla_interface) — don't
+    # spawn a duplicate. Try known role names, then any vehicle.
+    vehicles = list(world.get_actors().filter("vehicle.*"))
+    for role in ("ego_vehicle", "hero"):
+        for a in vehicles:
+            if a.attributes.get("role_name") == role:
+                return a
+    if vehicles:
+        return vehicles[0]
     bp = world.get_blueprint_library().filter("vehicle.*")[0]
     bp.set_attribute("role_name", "hero")
     sp = world.get_map().get_spawn_points()

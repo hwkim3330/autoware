@@ -77,3 +77,30 @@ lines in `/etc/watchdog.conf`. Done on this host.
 Also: `docker commit autoware autoware-ready` bakes the carla client + ~3.6GB ML
 artifacts into a reusable image so a container loss doesn't require re-downloading.
 `scripts/start_autoware.sh` defaults to the `autoware-ready` image.
+
+## STABILITY 2: single-box overload — CARLA crashes under full Autoware
+Symptom (the "rviz shows at first launch then goes black"): CARLA + the FULL
+Autoware stack (193 nodes incl. GPU perception: centerpoint/bevdet/etc.) on ONE
+16-core + RTX 3090 box saturates resources. Observed:
+- `load average` spiked to **~51 on 16 cores** during Autoware perception startup.
+- CARLA's RPC stalled >20s → `autoware_carla_interface` died with
+  `RuntimeError: time-out of 20000ms ... waiting for the simulator`
+  (in `ego_status()` / `get_wheel_steer_angle`), ego despawned, sensors stopped.
+- Then CARLA itself **segfaulted (Signal 11)** under the GPU/CPU contention.
+
+So it "works at first" (before perception fully loads) then everything stops.
+
+Mitigations (in order):
+1. **Raise the interface timeout** so it survives startup spikes:
+   `/opt/autoware/share/autoware_carla_interface/autoware_carla_interface.launch.xml`
+   `timeout` default 20 → 120 (also pass `timeout:=120` to e2e). Done.
+2. **Run Autoware lighter** — drop the heavy GPU perception ML and run
+   localization + planning + control only, so CARLA isn't starved.
+3. CARLA `-quality-level=Low`, cap fps; pin CPUs; or split CARLA / Autoware
+   across two machines (the production pattern).
+
+Separate pipeline note: even when the interface is alive, the NDT input
+`/localization/util/downsample/pointcloud` was empty (the carla_sensor_kit
+concatenate→downsample chain didn't produce output for the single CARLA lidar),
+so NDT couldn't converge (no map→base_link TF → black rviz). Needs sensor-kit
+sensing-pipeline review in addition to the load fix.
