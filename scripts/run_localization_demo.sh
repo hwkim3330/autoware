@@ -53,6 +53,18 @@ SUDO docker cp "$REPO/config/fastdds_udp.xml" autoware:/tmp/udp.xml >/dev/null 2
 SUDO docker cp "$REPO/config/sensor_mapping_lidar_only.yaml" \
   autoware:/opt/autoware/share/autoware_carla_interface/config/sensor_mapping.yaml >/dev/null 2>&1
 
+# Spawn the ego ON a lanelet. The interface's default spawn_point is "None"
+# (random) -> the ego lands ~60 m off the nearest Town01 lane (no lane nodes for
+# x in [218,238]); the mission planner then can't match a start lane and every
+# route comes back "planned route is empty". CARLA is y-flipped vs Autoware, so
+# an Autoware (x,y) lane maps to CARLA (x,-y). On-lane Town01 target ~ Autoware
+# (150,-2) heading along +x  ->  CARLA spawn "150.0, 2.0, 0.3, 0,0,0".
+# NOTE: these exact coords are a candidate -- verify on one clean run that NDT
+# localizes the ego near Autoware (150,-2) and set_route_points succeeds.
+SUDO docker exec autoware bash -lc \
+  'sed -i "s|name=\"spawn_point\" default=\"None\"|name=\"spawn_point\" default=\"150.0, 2.0, 0.3, 0.0, 0.0, 0.0\"|" \
+   /opt/autoware/share/autoware_carla_interface/autoware_carla_interface.launch.xml' >/dev/null 2>&1
+
 echo "==> [3/5] Clear stale ROS processes (full container restart)"
 SUDO docker restart autoware >/dev/null 2>&1; sleep 6
 

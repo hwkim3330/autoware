@@ -218,3 +218,33 @@ mismatch, or an off-lane spawn point). Next step for a closed loop:
 - verify `lanelet2_map.osm` and `pointcloud_map.pcd` for Town01 share one origin,
 - spawn the ego on a lanelet centerline (set `spawn_point` to a known on-lane
   pose) so the mission planner can find a start lane.
+
+## Root cause of "planned route is empty" — off-lane spawn (FIX STAGED)
+
+Diagnosed with a persistent rclpy node + parsing `Town01/lanelet2_map.osm`:
+- The interface's `spawn_point` default is **"None" → random spawn**. The ego
+  landed at Autoware map (228.3, -2.0).
+- The Town01 lanelet map covers local_x (-4, 398), local_y (-332, 4), BUT has
+  **zero lane nodes for x in [218, 238]** — the nearest lane node to the ego is
+  **60.3 m away** at (168, -4). The ego is simply not on any lane, so the mission
+  planner cannot find a start lanelet and **every** goal (even ones placed exactly
+  on real lane nodes, in every direction) returns "The planned route is empty".
+  It was never a goal problem; it is a *start-pose* problem.
+
+**Fix (staged in `scripts/run_localization_demo.sh` and the container launch):**
+set `spawn_point` to an on-lane pose. CARLA is y-flipped vs Autoware, so an
+Autoware lane at (150, -2) heading +x → CARLA spawn `"150.0, 2.0, 0.3, 0,0,0"`.
+Not yet verified end-to-end because CARLA stopped booting (below).
+
+## CARLA boot degrades after repeated crashes (driver state)
+
+After ~10 crash/relaunch cycles in one session, `CarlaUE4-Linux-Shipping` began
+**segfaulting instantly on boot** (Signal 11 at log line 1, before any UE init
+output) regardless of clean processes / low load / long GPU settle. GPU memory
+and dmesg are clean — this is the known UE4.26 + driver-535 instability
+accumulating in driver state. It does **not** recover without resetting the
+graphics stack (reboot, or unload/reload the nvidia modules — both kill the
+GNOME/rustdesk session). Practical rule: **don't crash-loop CARLA**; once it
+starts instant-segfaulting, reboot, then run `scripts/run_localization_demo.sh`
+once (it boots CARLA with a retry guard and never lets stale clients hammer the
+RPC port). The localization recipe + spawn_point fix are ready for that clean run.
