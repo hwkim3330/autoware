@@ -104,3 +104,26 @@ Separate pipeline note: even when the interface is alive, the NDT input
 concatenate→downsample chain didn't produce output for the single CARLA lidar),
 so NDT couldn't converge (no map→base_link TF → black rviz). Needs sensor-kit
 sensing-pipeline review in addition to the load fix.
+
+## CONCLUSION: single 16-core box is the limit (split machines for closed loop)
+After fixing the watchdog and lowering Autoware (perception:=false, rviz:=false),
+the box STILL can't sustain CARLA + Autoware together:
+- perception ON → load ~51 → CARLA segfaults.
+- perception OFF → load ~21 (16 cores) → NDT sensing preprocessing can't keep up
+  AND CARLA still dies under sustained contention; even `ros2 topic info` times out.
+- rviz (in container) fails GLXContext creation while CARLA holds the GPU/display
+  (container-GL vs host-driver + display contention) — floods logs.
+
+What's solid (done, committed): CARLA 0.9.16 on RTX3090 (driver 535) renders;
+Autoware universe-cuda image + autoware_carla_interface bring up the full stack;
+the CARLA→Autoware sensor/control bridge is LIVE (sensors + control_cmd); all 8
+town maps; interface timeout 20→120; ipc=host + shm for DDS; baked autoware-ready
+image. The Flutter tablet app is version-agnostic via the WebSocket gateway.
+
+Remaining for a closed loop (needs an unsaturated environment):
+1. Sensing→NDT: `/localization/util/downsample/pointcloud` empty — verify the
+   lidar frame_id ↔ carla_sensor_kit TF so the CropBox/relay feeds NDT.
+2. rviz on a display not shared with CARLA (separate X / second machine), or
+   visualize via the tablet app instead.
+RECOMMENDED ARCHITECTURE: run CARLA and Autoware on TWO machines (the standard
+CARLA-Autoware setup), or a much higher-core box, so neither starves the other.
