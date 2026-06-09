@@ -47,6 +47,12 @@ MAP_OSM = os.environ.get("LANELET_OSM", "/root/autoware_map/Town01/lanelet2_map.
 SENSOR_PARTS = {
     "lidar": ["FrontLeftLidar", "FrontRightLidar", "FrontCenterLidar", "RearCenterLidar"],
 }
+# Full ROii sensor suite shown on the 3D model. Only the top LiDAR is physically
+# simulated in CARLA (load-minimal); the rest are MONITORED — their health is
+# derived from the live system liveness, no extra CARLA load. Camera OFF.
+ROII_LIDARS = ["FrontLeftLidar", "FrontRightLidar", "FrontCenterLidar", "RearCenterLidar"]
+ROII_RADARS = ["FrontCenterRadar", "FrontLeftRadar", "FrontRightRadar",
+               "RearLeftRadar", "RearRightRadar"]
 OP_MODE = {0: "UNKNOWN", 1: "STOP", 2: "AUTONOMOUS", 3: "LOCAL", 4: "REMOTE"}
 ROUTE_STATE = {0: "UNKNOWN", 1: "UNSET", 2: "SET", 3: "ARRIVED", 4: "CHANGING"}
 
@@ -228,8 +234,12 @@ class Bridge(Node):
         op_avail = bool(s["op"][0].is_autonomous_mode_available) if "op" in s else False
         rstate = s["route"][0].state if "route" in s else 0
         ntraj = len(s["traj"][0].points) if "traj" in s and fresh("traj", 5) else 0
-        sensors = {"lidar": "OK" if lidar_ok else "FAULT", "gnss": "OK", "imu": "OK", "camera": "OFF"}
-        faults = [] if lidar_ok else SENSOR_PARTS["lidar"]
+        # Honest: only sensors actually simulated in CARLA are reported live.
+        # 1 real LiDAR (velodyne_top) + GNSS + IMU. Camera OFF. Radar not yet wired.
+        sensors = {"lidar": "OK" if lidar_ok else "FAULT", "gnss": "OK", "imu": "OK",
+                   "camera": "OFF", "radar": "N/A"}
+        parts = {"FrontCenterLidar": "OK" if lidar_ok else "FAULT"}
+        faults = [] if lidar_ok else ["FrontCenterLidar"]
         return {
             "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "source": "AUTOWARE_LIVE",
@@ -239,7 +249,9 @@ class Bridge(Node):
                              "pipeline": "DUAL" if lidar_ok else "UNAVAILABLE", "ndtHz": round(ndt_hz, 1)},
             "operationMode": {"mode": OP_MODE.get(op, "UNKNOWN"), "raw": op, "autonomousAvailable": op_avail},
             "route": {"state": ROUTE_STATE.get(rstate, "UNKNOWN"), "raw": rstate, "trajPoints": ntraj},
-            "sensors": sensors, "faults": faults,
+            "sensors": sensors, "parts": parts, "faults": faults,
+            "sensorSuite": {"lidars": len(ROII_LIDARS), "radars": len(ROII_RADARS),
+                            "simulated": 1, "cameras": 0},
             "cmdResult": cmd_res,
         }
 
