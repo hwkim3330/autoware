@@ -30,6 +30,6 @@ echo "Launching Autoware e2e ($TOWN) — rviz will open on the monitor..."
 sudo docker exec -d autoware bash -lc \
   "source /opt/autoware/setup.bash && ros2 launch autoware_launch e2e_simulator.launch.xml \
    map_path:=/root/autoware_map/$TOWN vehicle_model:=sample_vehicle \
-   sensor_model:=carla_sensor_kit simulator_type:=carla carla_map:=$TOWN \
+   sensor_model:=carla_sensor_kit simulator_type:=carla carla_map:=$TOWN timeout:=120 perception:=false rviz:=false launch_system_monitor:=false \
    > /tmp/e2e.log 2>&1"
 echo "Started. Watch: sudo docker exec autoware tail -f /tmp/e2e.log"
