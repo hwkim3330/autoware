@@ -85,4 +85,17 @@ SUDO docker exec autoware bash -lc \
    echo -n 'NDT downsample in : '; timeout 8 ros2 topic hz /localization/util/downsample/pointcloud 2>/dev/null|grep -m1 average; \
    echo -n 'kinematic_state   : '; timeout 8 ros2 topic hz /localization/kinematic_state 2>/dev/null|grep -m1 average; \
    echo -n 'TF map->base_link : '; timeout 8 ros2 run tf2_ros tf2_echo map base_link 2>/dev/null|grep -m1 Translation"
-echo "Done. CARLA log: /tmp/carla.log   Autoware log: docker exec autoware tail -f /tmp/e2e.log"
+
+echo "==> Start ROS->WebSocket gateway (tablet app) + rviz on the monitor"
+SUDO docker exec -d autoware bash -lc \
+  "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
+   python3 /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
+command -v adb >/dev/null && adb reverse tcp:8765 tcp:8765 >/dev/null 2>&1 || true
+# rviz on the host monitor (CARLA is RenderOffScreen, so the GPU display is free)
+DISPLAY=$DISP XAUTHORITY=$XA xhost +local: >/dev/null 2>&1 || true
+SUDO docker exec -d autoware bash -lc \
+  "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export DISPLAY=$DISP; export XAUTHORITY=/root/.Xauthority; \
+   source /opt/autoware/setup.bash; \
+   rviz2 -d /opt/autoware/share/autoware_launch/rviz/autoware.rviz > /tmp/rviz.log 2>&1"
+echo "Done. Gateway: ws://<host>:8765/ws (adb reverse for USB). rviz on the monitor."
+echo "CARLA log: /tmp/carla.log   Autoware log: docker exec autoware tail -f /tmp/e2e.log"
