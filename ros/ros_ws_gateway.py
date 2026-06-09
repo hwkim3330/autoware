@@ -40,6 +40,11 @@ from autoware_adapi_v1_msgs.msg import (
 from autoware_adapi_v1_msgs.srv import (
     SetRoutePoints, ClearRoute, ChangeOperationMode,
 )
+from autoware_control_msgs.msg import Control
+from autoware_vehicle_msgs.msg import GearCommand
+from autoware_adapi_v1_msgs.msg import ManualOperatorHeartbeat
+from tier4_control_msgs.msg import GateMode
+from tier4_control_msgs.srv import SetPause
 
 WS_HOST, WS_PORT, WS_PATH = "0.0.0.0", 8765, "/ws"
 MAP_OSM = os.environ.get("LANELET_OSM", "/root/autoware_map/Town01/lanelet2_map.osm")
@@ -129,6 +134,54 @@ class Bridge(Node):
         self.cli_auto = self.create_client(ChangeOperationMode, "/api/operation_mode/change_to_autonomous", callback_group=cbg)
         self.cli_stop = self.create_client(ChangeOperationMode, "/api/operation_mode/change_to_stop", callback_group=cbg)
         self.create_timer(0.5, self._process_cmds, callback_group=cbg)
+        # ---- manual teleop (joystick) ----
+        # External (manual joystick) control path: gate EXTERNAL + unpause, then
+        # publish to /external/selected/* which the gate forwards to the vehicle.
+        # Direct injection onto the interface's control input (proven to move the
+        # ego). We are a second publisher on the gate-output topic; at high rate we
+        # win the contention enough to drive. Plus arm the gate EXTERNAL+unpause so
+        # the gate itself stops emitting brake.
+        self.pub_ctrl = self.create_publisher(Control, "/control/command/control_cmd", 1)
+        self.pub_gate = self.create_publisher(GateMode, "/control/gate_mode_cmd", 1)
+        self.pub_gear = self.create_publisher(GearCommand, "/external/selected/gear_cmd", 1)
+        self.cli_pause = self.create_client(SetPause, "/control/vehicle_cmd_gate/set_pause", callback_group=cbg)
+        self.teleop = {"v": 0.0, "steer": 0.0, "until": 0.0}
+        self._teleop_armed = False
+        self.create_timer(0.01, self._teleop_tick, callback_group=cbg)  # 100 Hz
+
+    def _arm_teleop(self):
+        for _ in range(3):
+            self.pub_gate.publish(GateMode(data=1)); time.sleep(0.01)
+        try:
+            req = SetPause.Request(); req.pause = False
+            self.cli_pause.call_async(req)
+        except Exception:
+            pass
+        self._teleop_armed = True
+        self._res("manual teleop active")
+
+    def set_teleop(self, v, steer):
+        with self.lock:
+            self.teleop = {"v": float(v), "steer": float(steer),
+                           "until": time.monotonic() + 0.5}
+        if not self._teleop_armed:
+            self._arm_teleop()
+
+    def _teleop_tick(self):
+        with self.lock:
+            tp = dict(self.teleop)
+        if time.monotonic() > tp["until"]:
+            self._teleop_armed = False
+            return
+        now = self.get_clock().now().to_msg()
+        c = Control(); c.stamp = now
+        c.longitudinal.velocity = tp["v"]
+        c.longitudinal.acceleration = 2.0 if tp["v"] > 0 else (-2.0 if tp["v"] < 0 else 0.0)
+        c.lateral.steering_tire_angle = tp["steer"]
+        self.pub_ctrl.publish(c)            # direct (proven)
+        g = GearCommand(); g.stamp = now
+        g.command = 20 if tp["v"] < -0.01 else 2
+        self.pub_gear.publish(g)
 
     def _set(self, k, m):
         with self.lock:
@@ -268,7 +321,11 @@ async def handler(ws):
             try:
                 data = json.loads(msg)
                 cmd = data.get("cmd")
-                if cmd and BRIDGE:
+                if not BRIDGE:
+                    continue
+                if cmd == "teleop":
+                    BRIDGE.set_teleop(data.get("v", 0.0), data.get("steer", 0.0))
+                elif cmd:
                     BRIDGE.enqueue(cmd)
                     print(f"[cmd] {cmd}")
             except Exception as e:
