@@ -12,7 +12,7 @@ Usage:  python3 find_spawn.py <osm> [ego_x ego_y]
 import sys, math, re
 
 osm = sys.argv[1]
-txt = open(osm).read()
+txt = open(osm).read().replace("'", '"')  # JOSM exports use single quotes
 nd = {}
 for m in re.finditer(r'<node id="(-?\d+)"[^>]*>(.*?)</node>', txt, re.S):
     b = m.group(2)
@@ -20,6 +20,21 @@ for m in re.finditer(r'<node id="(-?\d+)"[^>]*>(.*?)</node>', txt, re.S):
     y = re.search(r'k="local_y" v="([-\d.]+)"', b)
     if x and y:
         nd[m.group(1)] = (float(x.group(1)), float(y.group(1)))
+
+if not nd:
+    # MGRS map (no local_x/local_y tags, e.g. Autoware sample real maps):
+    # map-frame coords = UTM easting/northing mod 100 km (the MGRS square).
+    import pyproj
+    nodes = re.findall(r'<node id="(-?\d+)"[^>]*lat="(-?[\d.]+)" lon="(-?[\d.]+)"', txt)
+    if nodes:
+        lat0, lon0 = float(nodes[0][1]), float(nodes[0][2])
+        zone = int((lon0 + 180) / 6) + 1
+        epsg = (32600 if lat0 >= 0 else 32700) + zone
+        tf = pyproj.Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+        for nid, lat, lon in nodes:
+            e, n = tf.transform(float(lon), float(lat))
+            nd[nid] = (e % 100000, n % 100000)
+        print(f"(MGRS map: {len(nd)} nodes via UTM zone {zone})")
 wy = {}
 for m in re.finditer(r'<way id="(-?\d+)"[^>]*>(.*?)</way>', txt, re.S):
     refs = [r for r in re.findall(r'<nd ref="(-?\d+)"', m.group(2)) if r in nd]

@@ -64,7 +64,7 @@ ROUTE_STATE = {0: "UNKNOWN", 1: "UNSET", 2: "SET", 3: "ARRIVED", 4: "CHANGING"}
 
 def load_centerlines(path):
     try:
-        txt = open(path).read()
+        txt = open(path).read().replace("'", '"')  # JOSM single quotes
     except Exception:
         return []
     nd = {}
@@ -74,6 +74,22 @@ def load_centerlines(path):
         y = re.search(r'k="local_y" v="([-\d.]+)"', b)
         if x and y:
             nd[m.group(1)] = (float(x.group(1)), float(y.group(1)))
+    if not nd:
+        # MGRS map (no local_x/local_y, e.g. real-world maps): map frame =
+        # UTM easting/northing mod 100 km (MGRS square).
+        try:
+            import pyproj
+            nodes = re.findall(r'<node id="(-?\d+)"[^>]*lat="(-?[\d.]+)" lon="(-?[\d.]+)"', txt)
+            if nodes:
+                lat0, lon0 = float(nodes[0][1]), float(nodes[0][2])
+                zone = int((lon0 + 180) / 6) + 1
+                epsg = (32600 if lat0 >= 0 else 32700) + zone
+                tf = pyproj.Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+                for nid, lat, lon in nodes:
+                    e, n = tf.transform(float(lon), float(lat))
+                    nd[nid] = (e % 100000, n % 100000)
+        except Exception:
+            pass
     wy = {}
     for m in re.finditer(r'<way id="(-?\d+)"[^>]*>(.*?)</way>', txt, re.S):
         refs = [r for r in re.findall(r'<nd ref="(-?\d+)"', m.group(2)) if r in nd]
