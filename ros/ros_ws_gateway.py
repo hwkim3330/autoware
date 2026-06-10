@@ -143,7 +143,7 @@ class Bridge(Node):
         # the gate itself stops emitting brake.
         self.pub_ctrl = self.create_publisher(Control, "/control/command/control_cmd", 1)
         self.pub_gate = self.create_publisher(GateMode, "/control/gate_mode_cmd", 1)
-        self.pub_gear = self.create_publisher(GearCommand, "/external/selected/gear_cmd", 1)
+        self.pub_gear = self.create_publisher(GearCommand, "/control/command/gear_cmd", 1)
         self.cli_pause = self.create_client(SetPause, "/control/vehicle_cmd_gate/set_pause", callback_group=cbg)
         self.teleop = {"v": 0.0, "steer": 0.0, "until": 0.0}
         self._teleop_armed = False
