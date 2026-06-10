@@ -235,15 +235,20 @@ class Bridge(Node):
         o = od[0].pose.pose
         ex, ey, q = o.position.x, o.position.y, o.orientation
         eyaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
-        # candidate goals 40-120m ahead along ego heading (cone), nearest first
+        # candidate goals 40-90m AHEAD (within ~70 deg of heading), nearest first.
+        # Ahead-on-lane goals route reliably; keeping few + nearest keeps drive fast
+        # even on large maps (Town04 ~17k centerline points).
         cand = []
         for x, y, tg in self.centerlines:
             d = math.hypot(x - ex, y - ey)
-            if 30 < d < 130:
-                cand.append((d, x, y, tg))
+            if 40 < d < 90:
+                ang = math.atan2(y - ey, x - ex)
+                if abs((ang - eyaw + math.pi) % (2 * math.pi) - math.pi) < 1.3:
+                    cand.append((d, x, y, tg))
         cand.sort()
-        self._call(self.cli_clear, ClearRoute.Request())
-        for d, gx, gy, gtg in cand[::max(1, len(cand) // 24)][:24]:
+        self._res(f"finding route ({len(cand)} cand)")
+        self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
+        for d, gx, gy, gtg in cand[:10]:
             req = SetRoutePoints.Request()
             req.header.frame_id = "map"
             req.header.stamp = self.get_clock().now().to_msg()
@@ -252,7 +257,7 @@ class Bridge(Node):
             gp.orientation.z = math.sin(gtg / 2); gp.orientation.w = math.cos(gtg / 2)
             req.goal = gp
             req.option.allow_goal_modification = True
-            r = self._call(self.cli_route, req, timeout=12.0)
+            r = self._call(self.cli_route, req, timeout=6.0)
             if r and r.status.success:
                 self._res(f"route set ({gx:.0f},{gy:.0f}); engaging")
                 time.sleep(2.0)
