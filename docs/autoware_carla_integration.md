@@ -281,3 +281,32 @@ reliable "drive the car" path.**
 accuracy diag passes naturally; (b) **Town04** (highway/loop) — simpler lanelet
 topology may route + plan more cleanly than Town01's grid. Enrich each town's
 lanelet map (speed_limit/turn_direction) first.
+
+## ✅ FULL AUTONOMOUS DRIVING ACHIEVED — Town04 (2026-06-10)
+
+One-command bring-up (`scripts/run_localization_demo.sh Town04`), then a single
+gateway `drive` (or tablet DRIVE / map tap) → route → trajectory (150+ pts) →
+AUTONOMOUS → sustained 15 km/h lane-following, 430 m+ verified.
+
+The three root causes that had blocked every town except Town01:
+1. **Missing `map_projector_info.yaml`** — CARLA lanelet maps use `local_x/local_y`
+   but loaded with the default MGRS projector → vector map placed far from the
+   ego (black rviz map, "planned route is empty"). Fix: `projector_type: local`
+   for every town (script installs it).
+2. **Random off-direction spawn** — mission planner can't match a start lanelet.
+   Fix: `ros/find_spawn.py` computes an aligned on-lane spawn per town; baked
+   into the launch (per-town table in the run script).
+3. **UDP socket buffers vs big maps** — Town04's ~8 MB LaneletMapBin fragments
+   into thousands of UDP datagrams; default 64 KB buffers drop fragments for
+   late joiners → behavior_path hangs "waiting for map", no trajectory ever.
+   Fix: 32 MB send/recv buffers in fastdds_udp.xml + host rmem/wmem_max.
+
+Also: engage must RETRY — the trajectory appears ~2-3 s after the route and
+autonomous only becomes available then (gateway retries 10×2 s).
+
+KNOWN LIMIT: re-routing mid-session (stop → clear → new drive) can crash the
+behavior_planning container (rclcpp guard-condition race / segv on module
+reset; it respawns but scenario_selector may stay stuck). One route per
+session is solid; for a new route, rerun the bring-up script (~4 min).
+Cameras fully off (launch nodes removed); perception_stub supplies empty
+objects + clear occupancy grid; 1 LiDAR (300k pts) is enough for NDT.

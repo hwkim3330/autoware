@@ -270,10 +270,15 @@ class Bridge(Node):
     def _engage(self, gx, gy):
         tag = f" ({gx:.0f},{gy:.0f})" if gx is not None else ""
         self._res(f"route set{tag}; engaging")
-        time.sleep(1.5)
-        ra = self._call(self.cli_auto, ChangeOperationMode.Request())
-        self._res("AUTONOMOUS" if (ra and ra.status.success)
-                  else f"route set, engage: {ra.status.message if ra else 'no resp'}")
+        # The trajectory appears ~2-3 s after the route and autonomous mode only
+        # becomes AVAILABLE then -- retry the engage until it sticks (~20 s).
+        for i in range(10):
+            time.sleep(2.0)
+            ra = self._call(self.cli_auto, ChangeOperationMode.Request())
+            if ra and ra.status.success:
+                self._res("AUTONOMOUS"); return
+            self._res(f"engaging... ({i + 1}/10)")
+        self._res(f"route set, engage failed: {ra.status.message if ra else 'no resp'}")
 
     def _set_route_to(self, gx, gy, gtg):
         """Set a route to one goal pose; return the service result."""
