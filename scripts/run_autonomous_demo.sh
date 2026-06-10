@@ -17,7 +17,7 @@ echo "==> [1/4] Boot CARLA on cores 0-5"
 SUDO pkill -9 -f CarlaUE4-Linux-Shipping 2>/dev/null; sleep 4
 for a in 1 2 3 4 5; do
   cd "$CARLA_DIR"
-  setsid taskset -c 0-5 env DISPLAY="$DISP" XAUTHORITY="$XA" \
+  setsid taskset -c 0-2 env DISPLAY="$DISP" XAUTHORITY="$XA" \
     ./CarlaUE4-Linux-Shipping CarlaUE4 -RenderOffScreen -quality-level=Low -nosound \
     -carla-rpc-port=2000 </dev/null >/tmp/carla.log 2>&1 & disown
   up=0; for i in $(seq 1 25); do sleep 3; ss -tlnp 2>/dev/null|grep -q :2000 && { up=1; break; }; done
@@ -28,7 +28,7 @@ ss -tlnp 2>/dev/null|grep -q :2000 || { echo "CARLA boot failed"; exit 1; }
 SUDO renice -n -10 -p "$(pgrep -f CarlaUE4-Linux-Shipping|head -1)" >/dev/null 2>&1
 
 echo "==> [2/4] clean container (cpuset 6-15)"
-SUDO docker update --cpuset-cpus="6-15" autoware >/dev/null 2>&1
+SUDO docker update --cpuset-cpus="3-15" autoware >/dev/null 2>&1
 SUDO docker stop autoware >/dev/null 2>&1; SUDO docker start autoware >/dev/null 2>&1; sleep 6
 
 echo "==> [3/4] launch e2e with PERCEPTION ON (cameras off in kit)"
