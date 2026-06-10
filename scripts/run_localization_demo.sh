@@ -81,12 +81,22 @@ SUDO docker cp "$REPO/config/sensor_mapping_lidar_only.yaml" \
 SUDO docker cp "$REPO/container_patches/autoware_carla_interface.launch.xml" \
   autoware:/opt/autoware/share/autoware_carla_interface/autoware_carla_interface.launch.xml >/dev/null 2>&1
 
+# Reverse-gear patch (stock interface hardcodes DRIVE; tablet REVERSE needs it).
+SUDO docker cp "$REPO/container_patches/carla_ros.py" \
+  autoware:/opt/autoware/lib/python3.10/site-packages/autoware_carla_interface/carla_ros.py >/dev/null 2>&1
+
 # Vector(lanelet2) map uses local_x/local_y -> the map MUST be loaded with the
 # 'local' projector, else it defaults to MGRS and the lanelets land far from the
 # pointcloud/ego: routing returns "planned route is empty" and rviz shows a black
 # (empty) map at the ego. Install local projector for every town's map.
 SUDO docker exec autoware bash -lc \
   'for d in /root/autoware_map/Town*/; do echo "projector_type: local" > "$d/map_projector_info.yaml"; done' >/dev/null 2>&1
+
+# Cruise speed: planner global cap (default 4.17 m/s = 15 km/h). 8.33 = 30 km/h;
+# actual speed = min(this, lanelet speed_limit, curve/decel constraints).
+SUDO docker exec autoware bash -lc \
+  "sed -i 's/max_vel: 4.17/max_vel: 8.33/' \
+   /opt/autoware/share/autoware_launch/config/planning/scenario_planning/common/common.param.yaml" >/dev/null 2>&1
 
 # Set the aligned spawn as the interface's spawn_point default (e2e_simulator does
 # not forward a spawn_point arg, so we bake it into the patched launch file).
