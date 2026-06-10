@@ -1,69 +1,93 @@
-# autoware-keti — CARLA ↔ ROS 2 ↔ Autoware + tablet monitor
+# autoware-keti — CARLA ↔ Autoware full autonomous driving + Tesla tablet app
 
-KETI autonomous-driving integration: the **CARLA** simulator driving an **Autoware**
-(ROS 2 Humble) stack, with a **Flutter tablet app** ("Multi-Mode Autoware Monitor")
-showing the live localization multi-mode. Runs on an RTX 3090 box (Ubuntu 24.04 /
-ROS 2 Jazzy host, Autoware in Docker).
+KETI autonomous-driving stack on **one 16-core / RTX-3090 box**: the CARLA
+simulator drives a full **Autoware** (ROS 2 Humble, Docker) stack — NDT
+localization, lanelet2 routing, behavior/motion planning, MPC control — and a
+**Flutter tablet app** (Tesla-style dashboard) commands and monitors it live.
 
 ```
-CARLA (RTX 3090) ──sensors──► Autoware (docker, Humble) ──control──► CARLA ego
-       │                                                              
-       └── carla_ws_gateway.py ──WebSocket──► Flutter app (Galaxy Tab, 3D dashboard)
+CARLA 0.9.16 (cores 0,8) ──lidar/imu/gnss──► Autoware (docker, cores 1-7,9-15)
+        ▲                                        │ NDT → route → trajectory → MPC
+        └────── throttle/steer/brake ◄───────────┘
+                                                 │ ros_ws_gateway.py (WebSocket)
+                          Galaxy Tab ◄───────────┘ Tesla dashboard, tap-to-go
 ```
 
-## What works (verified)
-| Piece | Status |
-|---|---|
-| **CARLA 0.9.16** native, RTX 3090 (driver 535) | ✅ GPU render, world ready |
-| **CARLA 0.10.0** (UE5) on driver 580 | ✅ (alt; for the tablet live demo) |
-| **CARLA → Autoware** sensor/control bridge (`autoware_carla_interface`, docker) | ✅ `/sensing/{lidar,gnss,imu,camera×6}`, `/control/command/control_cmd` live |
-| **All 8 CARLA town maps** (lanelet2 + pcd) | ✅ `scripts/download_carla_maps.sh` |
-| **Tablet app** — installed on Galaxy Tab S7 FE | ✅ live data via gateway; 3D car + Tesla dashboard |
-| Full autonomy closed loop (goal → plan → drive in rviz) | ⏳ bring-up (Autoware ML artifacts + e2e launch) |
+## Quick start (everything in one command)
 
-## The driver lesson (important)
-CARLA 0.9.x = **UE4.26**; its Vulkan RHI **hangs the render thread on NVIDIA 550/560+/580**
-(known issue). Use **driver 535** for CARLA 0.9.x. CARLA 0.10.0 = UE5 and runs on 580.
-Docker shares the **host** driver, so the host must be 535 for any 0.9.x (docker or native).
-See `docs/carla_live_setup.md`, `docs/autoware_carla_integration.md`.
+```bash
+bash scripts/run_localization_demo.sh Town04     # ~4 min: CARLA + Autoware + gateway + rviz
+```
+
+Then drive — any of:
+- **Tablet** (USB): DRIVE button, or tap a point on the map (tap-to-go)
+- `docker exec autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 /root/drive_monitor.py drive"`
+
+Verified: route SET → trajectory 150+ pts → AUTONOMOUS → 15 km/h lane-following,
+430 m+ continuous (Town04). The car is driven end-to-end by Autoware (mission →
+behavior → trajectory follower → vehicle gate); CARLA only simulates the world —
+its traffic-manager autopilot is off.
+
+## What made it work (root causes, all baked into the script)
+
+| Blocker | Root cause | Fix |
+|---|---|---|
+| "planned route is empty" everywhere, black rviz map | `map_projector_info.yaml` missing → vector map loaded as MGRS while nodes use `local_x/local_y` | `projector_type: local` for every town |
+| route still empty on-lane | random spawn faces against the lane → no start lanelet match | `ros/find_spawn.py` computes an aligned on-lane spawn per town (table in script) |
+| behavior_path stuck "waiting for map", trajectory never appears (big towns) | ~8 MB LaneletMapBin fragments dropped by 64 KB UDP socket buffers | 32 MB DDS buffers (`config/fastdds_udp.xml`) + host `rmem/wmem_max` |
+| engage "target mode not available" | trajectory (and availability) appears 2-3 s after the route | gateway retries engage 10×2 s |
+| CARLA segfault / RPC starvation | Autoware startup burst starves CARLA | CPU partition: CARLA `taskset 0,8` (one HT pair), container `1-7,9-15` |
+| ros2 CLI false negatives | SHM port lock race across ~100 nodes | UDP-only Fast-DDS profile |
+
+Known limit: re-routing mid-session (stop → clear → new drive) can crash the
+behavior_planning container (rclcpp race; it respawns but planning may stay
+stuck). One route per session is solid — rerun the script for a new route.
 
 ## Layout
+
 ```
-app/multimode_autoware_monitor/   Flutter tablet app (3D car, Tesla dashboard, 9 screens)
-ros/carla_ws_gateway.py           CARLA → WebSocket gateway (live telemetry → app)
-ros/objects_lite.json             lite ego sensor set
-scripts/                          start_carla_native.sh, start_autoware.sh, start_all.sh,
-                                  download_carla_maps.sh, setup_swap.sh, start_bridge.sh
-desktop/                          double-click launchers (also in ~/Desktop)
-docs/                             setup + integration notes
+scripts/run_localization_demo.sh   one-command bring-up (spawn table, configs, gateway, rviz)
+ros/ros_ws_gateway.py              ROS↔WebSocket gateway: live state + drive/goto/stop/clear/teleop
+ros/perception_stub.py             empty objects + clear occupancy grid (perception:=false)
+ros/find_spawn.py                  aligned on-lane spawn finder (any town osm)
+ros/drive_monitor.py               CLI drive + live monitor (route/traj/mode/speed)
+ros/diag_*.py                      routing / connectivity / route-lifecycle diagnostics
+config/fastdds_udp.xml             UDP-only DDS, 32 MB buffers (big vector maps)
+config/sensor_mapping_lidar_only.yaml  1 LiDAR (300k) + IMU + GNSS, cameras OFF
+container_patches/                 camera-free interface launch + clean rviz config
+docs/autoware_carla_integration.md full debugging history & root-cause writeups
+backup/app-versions/               tablet app archive (v1 pleos architecture, v2 3D monitor)
+app/, webapp/, desktop/, launch/   earlier gateway/app/launcher experiments (kept for reference)
 ```
 
-## Quick start (on the GPU desktop, monitor on the RTX 3090, logged into GNOME)
-```bash
-# one-time
-./scripts/download_carla_maps.sh            # all 8 town maps -> ~/autoware_map
-# everything (CARLA + Autoware + rviz + tablet gateway)
-./scripts/start_all.sh Town01
-# or double-click the "Autoware + CARLA Demo" icon on the desktop
-```
-Tablet app: **Settings → USB_ADB** (`adb reverse tcp:8765 tcp:8765`) or **WIFI**
-`ws://<PC-IP>:8765/ws`. Starts in DEMO (built-in mock) and auto-falls back to DEMO if
-the gateway is unreachable.
+## Tablet app
 
-## App
-Flutter, no external state-management/charts. 3D vehicle via `model_viewer_plus`,
-live updates via `StreamBuilder` + `web_socket_channel`. Screens: Dashboard (3D/2D car
-+ hero), Vehicle (Tesla-style 3D), Localization (single/dual/triple pipeline), Sensors,
-Autoware stack, ROii architecture, Metrics, Events, Settings. Build/install:
+Live app: `/home/kim/roii_autoware_monitor` — Tesla Model 3/Y layout: left
+panel (PRND strip, big speed, AUTOPILOT pill, 3D ROii), full-bleed dark nav map
+(grey lane network, Tesla-blue planned route, red destination pin; **tap the map
+to auto-drive there**), bottom icon dock (ROii architecture screen, manual
+joystick, Drive / Stop / Clear).
+
 ```bash
-cd app/multimode_autoware_monitor && flutter create . --platforms=android
-flutter build apk --debug && adb install -r build/app/outputs/flutter-apk/app-debug.apk
+cd /home/kim/roii_autoware_monitor
+flutter build apk --release && adb install -r build/app/outputs/flutter-apk/app-release.apk
+adb reverse tcp:8765 tcp:8765
 ```
+
+Older versions archived in `backup/app-versions/` (v1 = original PLEOS
+architecture viewer, v2 = 3D monitor with joystick/pedals teleop).
 
 ## Docs
-- `docs/carla_live_setup.md` — CARLA on RTX 3090 (native/headless), gotchas
-- `docs/autoware_carla_integration.md` — driver 535 + CARLA 0.9.16 + Autoware docker path
-- `docs/ros2-jazzy.md` — carla-ros-bridge build on Jazzy (alt to native ROS2/interface)
-- `docs/data_contract.md`, `docs/connection_guide.md`, `docs/app_concept.md`
+
+- `docs/autoware_carla_integration.md` — the full debugging history, every root cause
+- `docs/carla_live_setup.md` — CARLA on RTX 3090 (native/headless), driver gotchas
+- `docs/ros2-jazzy.md` — carla-ros-bridge build on Jazzy (alternative path)
+
+## Hardware / driver notes
+
+CARLA 0.9.x is UE4.26 — its Vulkan RHI hangs on NVIDIA driver 550+; use
+**driver 535**. CARLA boot is flaky (intermittent Signal 11) — the script
+retries until the RPC port stays up. After ~10 crash cycles the GPU driver
+state degrades: reboot to recover.
 
 🤖 Integration assembled with Claude Code.
