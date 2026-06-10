@@ -23,6 +23,17 @@
       <transport_descriptor>
         <transport_id>udp_only</transport_id>
         <type>UDPv4</type>
+        <!-- Large transient_local samples (the lanelet2 vector map: ~8 MB on
+             Town04 vs 0.5 MB on Town01) fragment into many UDP datagrams. With
+             the default ~64 KB socket buffers the receiver drops fragments on
+             late join -> behavior_path_planner hangs on "waiting for map" and
+             never produces a trajectory (Town01 is small enough to slip through).
+             Big socket buffers let the OS hold a whole fragmented sample.
+             sendBufferSize/receiveBufferSize are SO_SND/RCVBUF, capped by
+             net.core.wmem_max/rmem_max -> raised on the host in the run script. -->
+        <maxMessageSize>65500</maxMessageSize>
+        <sendBufferSize>33554432</sendBufferSize>
+        <receiveBufferSize>33554432</receiveBufferSize>
       </transport_descriptor>
     </transport_descriptors>
     <participant profile_name="udp_participant" is_default_profile="true">

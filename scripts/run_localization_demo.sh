@@ -51,6 +51,11 @@ DISP=$(tr '\0' '\n' </proc/$GS/environ | grep '^DISPLAY=' | cut -d= -f2)
 XA=$(tr '\0' '\n' </proc/$GS/environ | grep '^XAUTHORITY=' | cut -d= -f2)
 : "${DISP:=:1}"; : "${XA:=/run/user/1000/gdm/Xauthority}"
 
+# Raise UDP socket buffer ceilings so Fast-DDS can hold a fully fragmented
+# multi-MB vector map (see config/fastdds_udp.xml). The container shares the host
+# kernel net namespace, so setting it here applies inside the container too.
+SUDO sysctl -w net.core.rmem_max=33554432 net.core.wmem_max=33554432 >/dev/null 2>&1 || true
+
 echo "==> [1/5] Boot CARLA on cores 0-5 (retry until RPC stays up)"
 SUDO pkill -9 -f CarlaUE4-Linux-Shipping 2>/dev/null; sleep 4
 for attempt in 1 2 3 4 5; do

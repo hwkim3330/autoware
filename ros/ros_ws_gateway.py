@@ -248,26 +248,32 @@ class Bridge(Node):
                 if abs((ang - eyaw + math.pi) % (2 * math.pi) - math.pi) < 1.3:
                     cand.append((d, x, y, tg))
         cand.sort()
+        # prefer a few farther goals first (a meaningful drive), then nearer ones
+        order = cand[len(cand) // 3: len(cand) // 3 + 4] + cand[:4]
         self._res(f"finding route ({len(cand)} cand)")
         self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
-        for d, gx, gy, gtg in cand[:10]:
-            req = SetRoutePoints.Request()
-            req.header.frame_id = "map"
-            req.header.stamp = self.get_clock().now().to_msg()
-            gp = Pose()
-            gp.position.x = gx; gp.position.y = gy
-            gp.orientation.z = math.sin(gtg / 2); gp.orientation.w = math.cos(gtg / 2)
-            req.goal = gp
-            req.option.allow_goal_modification = True
-            r = self._call(self.cli_route, req, timeout=6.0)
-            if r and r.status.success:
-                self._res(f"route set ({gx:.0f},{gy:.0f}); engaging")
-                time.sleep(2.0)
-                ra = self._call(self.cli_auto, ChangeOperationMode.Request())
-                self._res("AUTONOMOUS" if (ra and ra.status.success)
-                          else f"route set, engage: {ra.status.message if ra else 'no resp'}")
-                return
+        for d, gx, gy, gtg in order:
+            r = self._set_route_to(gx, gy, gtg)
+            if (r and r.status.success) or self._route_is_set():
+                self._engage(gx, gy); return
+        # set_route_points can answer late; give the planner a moment, then check.
+        time.sleep(2.0)
+        if self._route_is_set():
+            self._engage(None, None); return
         self._res("no routable goal found")
+
+    def _route_is_set(self):
+        with self.lock:
+            r = self.s.get("route")
+        return bool(r and r[0].state == 2)  # RouteState.SET
+
+    def _engage(self, gx, gy):
+        tag = f" ({gx:.0f},{gy:.0f})" if gx is not None else ""
+        self._res(f"route set{tag}; engaging")
+        time.sleep(1.5)
+        ra = self._call(self.cli_auto, ChangeOperationMode.Request())
+        self._res("AUTONOMOUS" if (ra and ra.status.success)
+                  else f"route set, engage: {ra.status.message if ra else 'no resp'}")
 
     def _set_route_to(self, gx, gy, gtg):
         """Set a route to one goal pose; return the service result."""
@@ -279,7 +285,7 @@ class Bridge(Node):
         gp.orientation.z = math.sin(gtg / 2); gp.orientation.w = math.cos(gtg / 2)
         req.goal = gp
         req.option.allow_goal_modification = True
-        return self._call(self.cli_route, req, timeout=8.0)
+        return self._call(self.cli_route, req, timeout=14.0)
 
     def _goto(self, tx, ty):
         """Tesla-style tap-to-go: snap the tapped (x,y) to the nearest lane
@@ -294,13 +300,11 @@ class Bridge(Node):
         self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
         for gx, gy, gtg in near:
             r = self._set_route_to(gx, gy, gtg)
-            if r and r.status.success:
-                self._res(f"route set to ({gx:.0f},{gy:.0f}); engaging")
-                time.sleep(2.0)
-                ra = self._call(self.cli_auto, ChangeOperationMode.Request())
-                self._res("AUTONOMOUS -> goal" if (ra and ra.status.success)
-                          else f"route set, engage: {ra.status.message if ra else 'no resp'}")
-                return
+            if (r and r.status.success) or self._route_is_set():
+                self._engage(gx, gy); return
+        time.sleep(2.0)
+        if self._route_is_set():
+            self._engage(None, None); return
         self._res("goto: no routable goal near tap")
 
     def frame(self):
