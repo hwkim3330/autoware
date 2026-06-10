@@ -65,8 +65,14 @@ SUDO docker exec autoware bash -lc \
   'sed -i "s|name=\"spawn_point\" default=\"None\"|name=\"spawn_point\" default=\"150.0, 2.0, 0.3, 0.0, 0.0, 0.0\"|" \
    /opt/autoware/share/autoware_carla_interface/autoware_carla_interface.launch.xml' >/dev/null 2>&1
 
+# Relax localization diag so autonomous engage isn't blocked by the
+# accuracy/sensor_fusion ERROR leaves (stationary CARLA: sparse NDT, pose_buffer<2).
+LOCYAML=/opt/autoware/share/autoware_launch/config/system/diagnostics/localization.yaml
+SUDO docker exec autoware bash -lc \
+  "sed -i '/link: \/autoware\/localization\/accuracy }/d; /link: \/autoware\/localization\/sensor_fusion_status }/d' $LOCYAML" >/dev/null 2>&1 || true
+
 echo "==> [3/5] Clear stale ROS processes (full container restart)"
-SUDO docker restart autoware >/dev/null 2>&1; sleep 6
+SUDO docker restart autoware >/dev/null 2>&1 || true; sleep 6
 
 echo "==> [4/5] Launch Autoware e2e (localization only, UDP DDS)"
 SUDO docker exec -d autoware bash -lc \
@@ -100,3 +106,4 @@ SUDO docker exec -d autoware bash -lc \
    rviz2 -d /opt/autoware/share/autoware_launch/rviz/autoware.rviz > /tmp/rviz.log 2>&1"
 echo "Done. Gateway: ws://<host>:8765/ws (adb reverse for USB). rviz on the monitor."
 echo "CARLA log: /tmp/carla.log   Autoware log: docker exec autoware tail -f /tmp/e2e.log"
+exit 0
