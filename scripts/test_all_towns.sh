@@ -27,6 +27,7 @@ for TOWN in $TOWNS; do
   SUDO docker exec autoware bash -lc \
     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
      python3 /root/drive_monitor.py drive" > "/tmp/towntest_${TOWN}_drive.log" 2>&1 || true
+  SUDO docker cp autoware:/tmp/e2e.log "/tmp/towntest_${TOWN}_e2e.log" >/dev/null 2>&1 || true
 
   python3 - "$TOWN" "$LOC" "/tmp/towntest_${TOWN}_drive.log" "$OUT" <<'PY'
 import re, sys, math
