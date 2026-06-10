@@ -264,6 +264,13 @@ class Bridge(Node):
                 if abs((ang - eyaw + math.pi) % (2 * math.pi) - math.pi) < 1.3:
                     cand.append((d, x, y, tg))
         cand.sort()
+        if not cand:
+            # some lanelets store centerline points reversed vs travel direction
+            # -> "ahead" filter yields nothing. Fall back to any-direction goals;
+            # allow_goal_modification + the mission planner sort out routability.
+            cand = sorted((math.hypot(x - ex, y - ey), x, y, tg)
+                          for x, y, tg in self.centerlines
+                          if 40 < math.hypot(x - ex, y - ey) < 90)
         # prefer a few farther goals first (a meaningful drive), then nearer ones
         order = cand[len(cand) // 3: len(cand) // 3 + 4] + cand[:4]
         self._res(f"finding route ({len(cand)} cand)")
