@@ -32,15 +32,17 @@ SUDO() { echo 1 | sudo -S "$@"; }
 # spawn makes the mission planner fail to match a start lanelet -> every route
 # comes back "planned route is empty". These put the ego on the longest lane,
 # aligned with traffic, so set_route_points succeeds.
+# (validated: each spawn has 150+ centerline points 40-90 m ahead, so the
+#  gateway's goal search always has routable candidates)
 case "$TOWN" in
-  Town01)   SPAWN="392.4, 318.5, 0.5, 0.0, 0.0, -0.0" ;;
-  Town02)   SPAWN="138.5, 105.4, 0.5, 0.0, 0.0, -180.0" ;;
-  Town03)   SPAWN="164.1, 206.7, 0.5, 0.0, 0.0, -5.4" ;;
-  Town04)   SPAWN="-508.8, 290.4, 0.5, 0.0, 0.0, 75.0" ;;
-  Town05)   SPAWN="-72.9, -207.5, 0.5, 0.0, 0.0, -179.9" ;;
-  Town06)   SPAWN="599.1, 244.7, 0.5, 0.0, 0.0, -0.0" ;;
-  Town07)   SPAWN="75.6, -32.9, 0.5, 0.0, 0.0, -115.3" ;;
-  Town10HD) SPAWN="108.4, -34.9, 0.5, 0.0, 0.0, -105.9" ;;
+  Town01)   SPAWN="396.4, 9.9, 0.5, 0.0, 0.0, -180.0" ;;
+  Town02)   SPAWN="125.0, 240.9, 0.5, 0.0, 0.0, -0.0" ;;
+  Town03)   SPAWN="227.5, 146.2, 0.5, 0.0, 0.0, 100.7" ;;
+  Town04)   SPAWN="60.7, 260.1, 0.5, 0.0, 0.0, -218.6" ;;
+  Town05)   SPAWN="-65.8, 187.6, 0.5, 0.0, 0.0, 180.0" ;;
+  Town06)   SPAWN="599.1, 251.7, 0.5, 0.0, 0.0, -0.0" ;;
+  Town07)   SPAWN="-13.8, 61.5, 0.5, 0.0, 0.0, -0.0" ;;
+  Town10HD) SPAWN="19.4, -57.4, 0.5, 0.0, 0.0, -180.0" ;;
   *)        SPAWN="None" ;;
 esac
 echo "==> Town=$TOWN  aligned spawn=[$SPAWN]"
@@ -128,7 +130,7 @@ SUDO docker exec -d autoware bash -lc \
    ros2 launch autoware_launch e2e_simulator.launch.xml \
    map_path:=/root/autoware_map/$TOWN vehicle_model:=sample_vehicle \
    sensor_model:=carla_sensor_kit simulator_type:=carla carla_map:=$TOWN \
-   timeout:=120 perception:=false rviz:=false launch_system_monitor:=false \
+   timeout:=300 perception:=false rviz:=false launch_system_monitor:=false \
    > /tmp/e2e.log 2>&1"
 
 echo "==> [5/5] Waiting for localization to converge (~90 s)..."

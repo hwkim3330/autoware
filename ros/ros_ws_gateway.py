@@ -107,6 +107,13 @@ def load_centerlines(path):
         l, r = wy[L.group(1)], wy[R.group(1)]
         k = min(len(l), len(r))
         cl = [((l[i][0] + r[i][0]) / 2, (l[i][1] + r[i][1]) / 2) for i in range(k)]
+        # orient by geometry: keep the LEFT boundary on the left of travel
+        # (some osm store boundary points reversed -> wrong headings/goals).
+        if len(cl) >= 2:
+            dx, dy = cl[1][0] - cl[0][0], cl[1][1] - cl[0][1]
+            lx, ly = l[0][0] - cl[0][0], l[0][1] - cl[0][1]
+            if dx * ly - dy * lx < 0:
+                cl.reverse()
         for i in range(len(cl)):
             j = min(i + 1, len(cl) - 1)
             kk = max(i - 1, 0)
