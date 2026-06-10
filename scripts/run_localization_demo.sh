@@ -22,10 +22,28 @@
 #           kinematic_state 19 Hz, TF map->base_link present (converged).
 # ============================================================================
 set -u
-TOWN="${1:-Town01}"
+TOWN="${1:-Town04}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 CARLA_DIR=/opt/carla-simulator/CarlaUE4/Binaries/Linux
 SUDO() { echo 1 | sudo -S "$@"; }
+
+# Aligned on-lane spawn per town (CARLA coords, facing lane direction), computed
+# by ros/find_spawn.py from each town's lanelet2 osm. A RANDOM/off-direction
+# spawn makes the mission planner fail to match a start lanelet -> every route
+# comes back "planned route is empty". These put the ego on the longest lane,
+# aligned with traffic, so set_route_points succeeds.
+case "$TOWN" in
+  Town01)   SPAWN="392.4, 318.5, 0.5, 0.0, 0.0, -0.0" ;;
+  Town02)   SPAWN="138.5, 105.4, 0.5, 0.0, 0.0, -180.0" ;;
+  Town03)   SPAWN="164.1, 206.7, 0.5, 0.0, 0.0, -5.4" ;;
+  Town04)   SPAWN="-508.8, 290.4, 0.5, 0.0, 0.0, 75.0" ;;
+  Town05)   SPAWN="-72.9, -207.5, 0.5, 0.0, 0.0, -179.9" ;;
+  Town06)   SPAWN="599.1, 244.7, 0.5, 0.0, 0.0, -0.0" ;;
+  Town07)   SPAWN="75.6, -32.9, 0.5, 0.0, 0.0, -115.3" ;;
+  Town10HD) SPAWN="108.4, -34.9, 0.5, 0.0, 0.0, -105.9" ;;
+  *)        SPAWN="None" ;;
+esac
+echo "==> Town=$TOWN  aligned spawn=[$SPAWN]"
 
 # --- display (CARLA needs a live X server even with -RenderOffScreen / Vulkan) -
 GS=$(pgrep -x gnome-shell | head -1)
@@ -53,17 +71,29 @@ SUDO docker cp "$REPO/config/fastdds_udp.xml" autoware:/tmp/udp.xml >/dev/null 2
 SUDO docker cp "$REPO/config/sensor_mapping_lidar_only.yaml" \
   autoware:/opt/autoware/share/autoware_carla_interface/config/sensor_mapping.yaml >/dev/null 2>&1
 
-# Spawn the ego ON a lanelet. The interface's default spawn_point is "None"
-# (random) -> the ego lands ~60 m off the nearest Town01 lane (no lane nodes for
-# x in [218,238]); the mission planner then can't match a start lane and every
-# route comes back "planned route is empty". CARLA is y-flipped vs Autoware, so
-# an Autoware (x,y) lane maps to CARLA (x,-y). On-lane Town01 target ~ Autoware
-# (150,-2) heading along +x  ->  CARLA spawn "150.0, 2.0, 0.3, 0,0,0".
-# NOTE: these exact coords are a candidate -- verify on one clean run that NDT
-# localizes the ego near Autoware (150,-2) and set_route_points succeeds.
+# Camera-off interface launch (camera relay/republish/combiner nodes stripped ->
+# no camera processes, saves CPU; cameras are not simulated in the lidar-only kit).
+SUDO docker cp "$REPO/container_patches/autoware_carla_interface.launch.xml" \
+  autoware:/opt/autoware/share/autoware_carla_interface/autoware_carla_interface.launch.xml >/dev/null 2>&1
+
+# Vector(lanelet2) map uses local_x/local_y -> the map MUST be loaded with the
+# 'local' projector, else it defaults to MGRS and the lanelets land far from the
+# pointcloud/ego: routing returns "planned route is empty" and rviz shows a black
+# (empty) map at the ego. Install local projector for every town's map.
 SUDO docker exec autoware bash -lc \
-  'sed -i "s|name=\"spawn_point\" default=\"None\"|name=\"spawn_point\" default=\"150.0, 2.0, 0.3, 0.0, 0.0, 0.0\"|" \
-   /opt/autoware/share/autoware_carla_interface/autoware_carla_interface.launch.xml' >/dev/null 2>&1
+  'for d in /root/autoware_map/Town*/; do echo "projector_type: local" > "$d/map_projector_info.yaml"; done' >/dev/null 2>&1
+
+# Set the aligned spawn as the interface's spawn_point default (e2e_simulator does
+# not forward a spawn_point arg, so we bake it into the patched launch file).
+SUDO docker exec autoware bash -lc \
+  "sed -i 's|name=\"spawn_point\" default=\"None\"|name=\"spawn_point\" default=\"$SPAWN\"|' \
+   /opt/autoware/share/autoware_carla_interface/autoware_carla_interface.launch.xml" >/dev/null 2>&1
+
+# Refresh the gateway + perception stub + helper scripts in the container.
+for f in ros_ws_gateway.py perception_stub.py find_spawn.py diag_route.py diag_connectivity.py; do
+  [ -f "$REPO/ros/$f" ] && SUDO docker cp "$REPO/ros/$f" autoware:/root/$f >/dev/null 2>&1
+done
+SUDO docker cp "$REPO/container_patches/roii_clean.rviz" autoware:/root/roii_clean.rviz >/dev/null 2>&1
 
 # Relax localization diag so autonomous engage isn't blocked by the
 # accuracy/sensor_fusion ERROR leaves (stationary CARLA: sparse NDT, pose_buffer<2).
@@ -106,7 +136,7 @@ DISPLAY=$DISP XAUTHORITY=$XA xhost +local: >/dev/null 2>&1 || true
 SUDO docker exec -d autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export DISPLAY=$DISP; export XAUTHORITY=/root/.Xauthority; \
    source /opt/autoware/setup.bash; \
-   rviz2 -d /opt/autoware/share/autoware_launch/rviz/autoware.rviz > /tmp/rviz.log 2>&1"
+   rviz2 -d /root/roii_clean.rviz > /tmp/rviz.log 2>&1"
 echo "Done. Gateway: ws://<host>:8765/ws (adb reverse for USB). rviz on the monitor."
 echo "CARLA log: /tmp/carla.log   Autoware log: docker exec autoware tail -f /tmp/e2e.log"
 exit 0

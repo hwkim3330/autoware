@@ -210,6 +210,8 @@ class Bridge(Node):
                 self._call(self.cli_stop, ChangeOperationMode.Request()); self._res("STOP mode")
             elif cmd == "drive":
                 self._drive()
+            elif isinstance(cmd, tuple) and cmd[0] == "goto":
+                self._goto(cmd[1], cmd[2])
         except Exception as e:
             self._res(f"error: {e}")
 
@@ -267,6 +269,40 @@ class Bridge(Node):
                 return
         self._res("no routable goal found")
 
+    def _set_route_to(self, gx, gy, gtg):
+        """Set a route to one goal pose; return the service result."""
+        req = SetRoutePoints.Request()
+        req.header.frame_id = "map"
+        req.header.stamp = self.get_clock().now().to_msg()
+        gp = Pose()
+        gp.position.x = float(gx); gp.position.y = float(gy)
+        gp.orientation.z = math.sin(gtg / 2); gp.orientation.w = math.cos(gtg / 2)
+        req.goal = gp
+        req.option.allow_goal_modification = True
+        return self._call(self.cli_route, req, timeout=8.0)
+
+    def _goto(self, tx, ty):
+        """Tesla-style tap-to-go: snap the tapped (x,y) to the nearest lane
+        centerline points and route there, then engage autonomous."""
+        if tx is None or ty is None or not self.centerlines:
+            self._res("goto: bad point"); return
+        tx, ty = float(tx), float(ty)
+        # nearest centerline points to the tap, nearest-first (try a few in case
+        # the closest one sits on an unroutable/opposing lane segment)
+        near = sorted(self.centerlines, key=lambda p: math.hypot(p[0] - tx, p[1] - ty))[:8]
+        self._res(f"goto ({tx:.0f},{ty:.0f}) -> snapped {math.hypot(near[0][0]-tx, near[0][1]-ty):.0f}m")
+        self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
+        for gx, gy, gtg in near:
+            r = self._set_route_to(gx, gy, gtg)
+            if r and r.status.success:
+                self._res(f"route set to ({gx:.0f},{gy:.0f}); engaging")
+                time.sleep(2.0)
+                ra = self._call(self.cli_auto, ChangeOperationMode.Request())
+                self._res("AUTONOMOUS -> goal" if (ra and ra.status.success)
+                          else f"route set, engage: {ra.status.message if ra else 'no resp'}")
+                return
+        self._res("goto: no routable goal near tap")
+
     def frame(self):
         with self.lock:
             s = dict(self.s); lt = list(self.lidar_t); cmd_res = self.last_cmd_result
@@ -292,6 +328,12 @@ class Bridge(Node):
         op_avail = bool(s["op"][0].is_autonomous_mode_available) if "op" in s else False
         rstate = s["route"][0].state if "route" in s else 0
         ntraj = len(s["traj"][0].points) if "traj" in s and fresh("traj", 5) else 0
+        # planned-path overlay for the tablet map (downsampled to ~120 pts)
+        traj_path = []
+        if "traj" in s and fresh("traj", 5):
+            tp = s["traj"][0].points
+            step = max(1, len(tp) // 120)
+            traj_path = [[round(p.pose.position.x, 1), round(p.pose.position.y, 1)] for p in tp[::step]]
         # Honest: only sensors actually simulated in CARLA are reported live.
         # 1 real LiDAR (velodyne_top) + GNSS + IMU. Camera OFF. Radar not yet wired.
         sensors = {"lidar": "OK" if lidar_ok else "FAULT", "gnss": "OK", "imu": "OK",
@@ -306,7 +348,8 @@ class Bridge(Node):
                              "mode": "LIDAR_GNSS" if lidar_ok else "UNAVAILABLE",
                              "pipeline": "DUAL" if lidar_ok else "UNAVAILABLE", "ndtHz": round(ndt_hz, 1)},
             "operationMode": {"mode": OP_MODE.get(op, "UNKNOWN"), "raw": op, "autonomousAvailable": op_avail},
-            "route": {"state": ROUTE_STATE.get(rstate, "UNKNOWN"), "raw": rstate, "trajPoints": ntraj},
+            "route": {"state": ROUTE_STATE.get(rstate, "UNKNOWN"), "raw": rstate,
+                      "trajPoints": ntraj, "trajPath": traj_path},
             "sensors": sensors, "parts": parts, "faults": faults,
             "sensorSuite": {"lidars": len(ROII_LIDARS), "radars": len(ROII_RADARS),
                             "simulated": 1, "cameras": 0},
@@ -321,6 +364,15 @@ BRIDGE = None
 async def handler(ws):
     CLIENTS.add(ws)
     print(f"[+] app connected ({len(CLIENTS)})")
+    # one-time lane map for the tablet's 2D Tesla-style map (downsampled)
+    try:
+        if BRIDGE and BRIDGE.centerlines:
+            cl = BRIDGE.centerlines
+            step = max(1, len(cl) // 4000)
+            lanes = [[round(x, 1), round(y, 1)] for x, y, _ in cl[::step]]
+            await ws.send(json.dumps({"type": "lanes", "pts": lanes}))
+    except Exception as e:
+        print("lanes send error:", e)
     try:
         async for msg in ws:
             try:
@@ -330,6 +382,9 @@ async def handler(ws):
                     continue
                 if cmd == "teleop":
                     BRIDGE.set_teleop(data.get("v", 0.0), data.get("steer", 0.0))
+                elif cmd == "goto":
+                    BRIDGE.enqueue(("goto", data.get("x"), data.get("y")))
+                    print(f"[cmd] goto {data.get('x')},{data.get('y')}")
                 elif cmd:
                     BRIDGE.enqueue(cmd)
                     print(f"[cmd] {cmd}")

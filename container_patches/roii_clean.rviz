@@ -1,0 +1,123 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded: ~
+    Help Height: 0
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Color: "; 80 80 80"
+      Cell Size: 5
+      Plane Cell Count: 200
+      Enabled: true
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+      Marker Scale: 3
+      Show Names: false
+    # --- Pointcloud map (NDT reference) ---
+    - Class: rviz_default_plugins/PointCloud2
+      Name: PointCloudMap
+      Topic:
+        Value: /map/pointcloud_map
+        Depth: 5
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Color Transformer: FlatColor
+      Color: "; 110 110 130"
+      Size (m): 0.05
+      Style: Points
+      Enabled: true
+    # --- Vector (lanelet2) map ---
+    - Class: rviz_default_plugins/MarkerArray
+      Name: VectorMap
+      Topic:
+        Value: /map/vector_map_marker
+        Depth: 5
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Enabled: true
+    # --- Live LiDAR scan ---
+    - Class: rviz_default_plugins/PointCloud2
+      Name: LiDAR
+      Topic:
+        Value: /sensing/lidar/concatenated/pointcloud
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+      Color Transformer: AxisColor
+      Size (m): 0.04
+      Style: Points
+      Enabled: true
+    # --- Ego vehicle model ---
+    - Class: rviz_default_plugins/RobotModel
+      Name: VehicleModel
+      Description Topic:
+        Value: /robot_description
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Enabled: true
+      Visual Enabled: true
+    # --- Planned trajectory ---
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Trajectory
+      Topic:
+        Value: /planning/scenario_planning/trajectory/debug/markers
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Enabled: true
+    - Class: autoware_planning_rviz_plugin/Trajectory
+      Name: TrajectoryPath
+      Topic:
+        Value: /planning/scenario_planning/trajectory
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      View Path:
+        Enabled: true
+        Width: 2.0
+        Color: "; 0 200 255"
+        Alpha: 0.7
+      View Velocity:
+        Enabled: false
+      Enabled: true
+    # --- Route goal ---
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Route
+      Topic:
+        Value: /planning/mission_planning/route_marker
+        Depth: 5
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Enabled: true
+  Global Options:
+    Background Color: "; 20 22 28"
+    Fixed Frame: map
+    Frame Rate: 20
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+  Views:
+    Current:
+      Class: rviz_default_plugins/ThirdPersonFollower
+      Name: ChaseCam
+      Target Frame: base_link
+      Distance: 45
+      Pitch: 0.9
+      Near Clip Distance: 0.05
+    Saved:
+      - Class: rviz_default_plugins/TopDownOrtho
+        Name: TopDown
+        Target Frame: base_link
+        Scale: 8
+Window Geometry:
+  Height: 900
+  Width: 1500
+  Hide Left Dock: false
+  Hide Right Dock: true

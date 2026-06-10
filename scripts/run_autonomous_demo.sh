@@ -4,6 +4,7 @@
 # -> trajectory -> drive. CPU partition keeps CARLA (cores 0-5) safe.
 set -u
 TOWN="${1:-Town01}"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 CARLA_DIR=/opt/carla-simulator/CarlaUE4/Binaries/Linux
 SUDO(){ echo 1 | sudo -S "$@"; }
 GS=$(pgrep -x gnome-shell|head -1)
@@ -27,9 +28,12 @@ done
 ss -tlnp 2>/dev/null|grep -q :2000 || { echo "CARLA boot failed"; exit 1; }
 SUDO renice -n -10 -p "$(pgrep -f CarlaUE4-Linux-Shipping|head -1)" >/dev/null 2>&1
 
-echo "==> [2/4] clean container (cpuset 6-15)"
+echo "==> [2/4] clean container (cpuset 6-15), install configs"
 SUDO docker update --cpuset-cpus="1-7,9-15" autoware >/dev/null 2>&1
 SUDO docker stop autoware >/dev/null 2>&1; SUDO docker start autoware >/dev/null 2>&1; sleep 6
+SUDO docker cp "$REPO/config/fastdds_udp.xml" autoware:/tmp/udp.xml
+SUDO docker cp "$REPO/config/sensor_mapping_lidar_only.yaml" \
+  autoware:/opt/autoware/share/autoware_carla_interface/config/sensor_mapping.yaml
 
 echo "==> [3/4] launch e2e with PERCEPTION ON (cameras off in kit)"
 SUDO docker exec -d autoware bash -lc \
