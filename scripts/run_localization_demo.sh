@@ -72,11 +72,27 @@ done
 ss -tlnp 2>/dev/null | grep -q :2000 || { echo "CARLA failed to boot"; exit 1; }
 SUDO renice -n -10 -p "$(pgrep -f CarlaUE4-Linux-Shipping | head -1)" >/dev/null 2>&1
 
-echo "==> [2/5] Pin Autoware container to cores 6-15, install configs"
+echo "==> [2/5] Pin Autoware container to cores 6-15, install configs (LIDARS=${LIDARS:-4})"
 SUDO docker update --cpuset-cpus="1-7,9-15" autoware >/dev/null 2>&1
 SUDO docker cp "$REPO/config/fastdds_udp.xml" autoware:/tmp/udp.xml >/dev/null 2>&1
-SUDO docker cp "$REPO/config/sensor_mapping_lidar_only.yaml" \
-  autoware:/opt/autoware/share/autoware_carla_interface/config/sensor_mapping.yaml >/dev/null 2>&1
+
+# LiDAR suite: default = ROii 4-LiDAR (front/rear G32 directional + side rotating
+# Pandars, concatenated). LIDARS=1 falls back to the single velodyne_top config.
+if [ "${LIDARS:-4}" = "4" ]; then
+  SUDO docker cp "$REPO/config/sensor_mapping_roii_4lidar.yaml" \
+    autoware:/opt/autoware/share/autoware_carla_interface/config/sensor_mapping.yaml >/dev/null 2>&1
+  SUDO docker cp "$REPO/container_patches/pointcloud_preprocessor_4lidar.launch.py" \
+    autoware:/opt/autoware/share/carla_sensor_kit_launch/launch/pointcloud_preprocessor.launch.py >/dev/null 2>&1
+  SUDO docker cp "$REPO/container_patches/sensor_kit_calibration.yaml" \
+    autoware:/opt/autoware/share/carla_sensor_kit_description/config/sensor_kit_calibration.yaml >/dev/null 2>&1
+  SUDO docker cp "$REPO/container_patches/carla_wrapper.py" \
+    autoware:/opt/autoware/lib/python3.10/site-packages/autoware_carla_interface/modules/carla_wrapper.py >/dev/null 2>&1
+else
+  SUDO docker cp "$REPO/config/sensor_mapping_lidar_only.yaml" \
+    autoware:/opt/autoware/share/autoware_carla_interface/config/sensor_mapping.yaml >/dev/null 2>&1
+  SUDO docker cp "$REPO/container_patches/pointcloud_preprocessor_1lidar.launch.py" \
+    autoware:/opt/autoware/share/carla_sensor_kit_launch/launch/pointcloud_preprocessor.launch.py >/dev/null 2>&1
+fi
 
 # Camera-off interface launch (camera relay/republish/combiner nodes stripped ->
 # no camera processes, saves CPU; cameras are not simulated in the lidar-only kit).
@@ -111,6 +127,7 @@ for f in ros_ws_gateway.py perception_stub.py find_spawn.py diag_route.py diag_c
   [ -f "$REPO/ros/$f" ] && SUDO docker cp "$REPO/ros/$f" autoware:/root/$f >/dev/null 2>&1
 done
 SUDO docker cp "$REPO/container_patches/roii_clean.rviz" autoware:/root/roii_clean.rviz >/dev/null 2>&1
+SUDO docker cp "$REPO/container_patches/autoware_no_camera.rviz" autoware:/root/autoware_no_camera.rviz >/dev/null 2>&1
 
 # Relax localization diag so autonomous engage isn't blocked by the
 # accuracy/sensor_fusion ERROR leaves (stationary CARLA: sparse NDT, pose_buffer<2).
@@ -137,7 +154,8 @@ echo "==> [5/5] Waiting for localization to converge (~90 s)..."
 sleep 90
 SUDO docker exec autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
-   echo -n 'lidar before_sync : '; timeout 8 ros2 topic hz /sensing/lidar/top/pointcloud_before_sync 2>/dev/null|grep -m1 average; \
+   echo -n 'lidar front       : '; timeout 8 ros2 topic hz /sensing/lidar/front/pointcloud_before_sync 2>/dev/null|grep -m1 average || timeout 8 ros2 topic hz /sensing/lidar/top/pointcloud_before_sync 2>/dev/null|grep -m1 average; \
+   echo -n 'lidar concat      : '; timeout 8 ros2 topic hz /sensing/lidar/concatenated/pointcloud 2>/dev/null|grep -m1 average; \
    echo -n 'NDT downsample in : '; timeout 8 ros2 topic hz /localization/util/downsample/pointcloud 2>/dev/null|grep -m1 average; \
    echo -n 'kinematic_state   : '; timeout 8 ros2 topic hz /localization/kinematic_state 2>/dev/null|grep -m1 average; \
    echo -n 'TF map->base_link : '; timeout 8 ros2 run tf2_ros tf2_echo map base_link 2>/dev/null|grep -m1 Translation"
@@ -153,7 +171,7 @@ DISPLAY=$DISP XAUTHORITY=$XA xhost +local: >/dev/null 2>&1 || true
 SUDO docker exec -d autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export DISPLAY=$DISP; export XAUTHORITY=/root/.Xauthority; \
    source /opt/autoware/setup.bash; \
-   rviz2 -d /root/roii_clean.rviz > /tmp/rviz.log 2>&1"
+   rviz2 -d /root/autoware_no_camera.rviz > /tmp/rviz.log 2>&1"
 echo "Done. Gateway: ws://<host>:8765/ws (adb reverse for USB). rviz on the monitor."
 echo "CARLA log: /tmp/carla.log   Autoware log: docker exec autoware tail -f /tmp/e2e.log"
 exit 0

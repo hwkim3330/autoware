@@ -151,6 +151,13 @@ class Bridge(Node):
         from sensor_msgs.msg import PointCloud2
         self.create_subscription(PointCloud2, "/localization/util/downsample/pointcloud",
                                  self._lidar_tick, be)
+        # per-LiDAR liveness (ROii 4-lidar suite; in 1-lidar mode only front maps)
+        self.lidar_part_t = {k: [] for k in
+                             ("front", "rear", "side_left", "side_right")}
+        for key in self.lidar_part_t:
+            self.create_subscription(
+                PointCloud2, f"/sensing/lidar/{key}/pointcloud_before_sync",
+                (lambda k: lambda m: self._part_tick(k))(key), be)
         cbg = ReentrantCallbackGroup()
         self.cli_clear = self.create_client(ClearRoute, "/api/routing/clear_route", callback_group=cbg)
         self.cli_route = self.create_client(SetRoutePoints, "/api/routing/set_route_points", callback_group=cbg)
@@ -209,6 +216,13 @@ class Bridge(Node):
     def _set(self, k, m):
         with self.lock:
             self.s[k] = (m, time.monotonic())
+
+    def _part_tick(self, key):
+        now = time.monotonic()
+        with self.lock:
+            ts = self.lidar_part_t[key]
+            ts.append(now)
+            self.lidar_part_t[key] = [t for t in ts if now - t < 3.0]
 
     def _lidar_tick(self, _m):
         now = time.monotonic()
@@ -377,8 +391,21 @@ class Bridge(Node):
         # 1 real LiDAR (velodyne_top) + GNSS + IMU. Camera OFF. Radar not yet wired.
         sensors = {"lidar": "OK" if lidar_ok else "FAULT", "gnss": "OK", "imu": "OK",
                    "camera": "OFF", "radar": "N/A"}
-        parts = {"FrontCenterLidar": "OK" if lidar_ok else "FAULT"}
-        faults = [] if lidar_ok else ["FrontCenterLidar"]
+        with self.lock:
+            pt = {k: list(v) for k, v in self.lidar_part_t.items()}
+        name_map = {"front": "FrontCenterLidar", "rear": "RearCenterLidar",
+                    "side_left": "FrontLeftLidar", "side_right": "FrontRightLidar"}
+        parts, faults = {}, []
+        any_part = any(len(v) >= 2 for v in pt.values())
+        for k, disp in name_map.items():
+            ok = len(pt[k]) >= 2
+            if any_part:
+                parts[disp] = "OK" if ok else "FAULT"
+                if not ok:
+                    faults.append(disp)
+        if not any_part:  # 1-lidar mode: report the single pipeline
+            parts = {"FrontCenterLidar": "OK" if lidar_ok else "FAULT"}
+            faults = [] if lidar_ok else ["FrontCenterLidar"]
         return {
             "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "source": "AUTOWARE_LIVE",
@@ -391,7 +418,7 @@ class Bridge(Node):
                       "trajPoints": ntraj, "trajPath": traj_path},
             "sensors": sensors, "parts": parts, "faults": faults,
             "sensorSuite": {"lidars": len(ROII_LIDARS), "radars": len(ROII_RADARS),
-                            "simulated": 1, "cameras": 0},
+                            "simulated": 4, "cameras": 0},
             "cmdResult": cmd_res,
         }
 
