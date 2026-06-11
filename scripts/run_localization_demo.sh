@@ -35,13 +35,13 @@ SUDO() { echo 1 | sudo -S "$@"; }
 # (validated: each spawn has 150+ centerline points 40-90 m ahead, so the
 #  gateway's goal search always has routable candidates)
 case "$TOWN" in
-  Town01)   SPAWN="396.4, 9.9, 0.5, 0.0, 0.0, -180.0" ;;
+  Town01)   SPAWN="144.1, 129.7, 0.6, 0.0, 0.0, 180.0" ;;
   Town02)   SPAWN="125.0, 240.9, 0.5, 0.0, 0.0, -0.0" ;;
   Town03)   SPAWN="227.5, 146.2, 0.5, 0.0, 0.0, 100.7" ;;
   Town04)   SPAWN="60.7, 260.1, 0.5, 0.0, 0.0, -218.6" ;;
-  Town05)   SPAWN="-65.8, 187.6, 0.5, 0.0, 0.0, 180.0" ;;
-  Town06)   SPAWN="599.1, 251.7, 0.5, 0.0, 0.0, -0.0" ;;
-  Town07)   SPAWN="-13.8, 61.5, 0.5, 0.0, 0.0, -0.0" ;;
+  Town05)   SPAWN="-184.6, -31.8, 0.9, 0.0, 0.0, -90.0" ;;
+  Town06)   SPAWN="606.8, 152.4, 0.6, 0.0, 0.0, 0.2" ;;
+  Town07)   SPAWN="-31.4, -109.0, 0.6, 0.0, 0.0, -179.8" ;;
   Town10HD) SPAWN="19.4, -57.4, 0.5, 0.0, 0.0, -180.0" ;;
   *)        SPAWN="None" ;;
 esac
