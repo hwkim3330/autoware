@@ -185,8 +185,18 @@ for e2etry in 1 2 3; do
      > /tmp/e2e.log 2>&1"
   sleep 60
   DIED=$(SUDO docker exec autoware bash -lc "grep -ac 'process has died' /tmp/e2e.log" 2>/dev/null | tr -dc 0-9)
+  if [ "${DIED:-0}" != "0" ]; then
+    echo "    a component died during startup ($DIED) -- clean retry"
+    SUDO docker restart autoware >/dev/null 2>&1 || true; sleep 6
+    continue
+  fi
+  # deaths also happen 60-150 s in (late component loads) -- the respawned
+  # container deadlocks (behavior waits for scenario, a core spins). Give the
+  # stack the full settle window, then check ONCE more before accepting it.
+  sleep 80
+  DIED=$(SUDO docker exec autoware bash -lc "grep -ac 'process has died' /tmp/e2e.log" 2>/dev/null | tr -dc 0-9)
   [ "${DIED:-0}" = "0" ] && break
-  echo "    a component died during startup ($DIED) -- clean retry"
+  echo "    a component died late ($DIED) -- clean retry"
   SUDO docker restart autoware >/dev/null 2>&1 || true; sleep 6
 done
 
