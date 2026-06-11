@@ -23,10 +23,13 @@ Then drive — any of:
 - **Tablet** (USB): DRIVE button, or tap a point on the map (tap-to-go)
 - `docker exec autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 /root/drive_monitor.py drive"`
 
-Verified: route SET → trajectory 150+ pts → AUTONOMOUS → 15 km/h lane-following,
-430 m+ continuous (Town04). The car is driven end-to-end by Autoware (mission →
-behavior → trajectory follower → vehicle gate); CARLA only simulates the world —
-its traffic-manager autopilot is off.
+Verified: route SET → trajectory 150+ pts → AUTONOMOUS → up to ~28 km/h
+lane-following (cap `max_vel: 8.33`). The car is driven end-to-end by Autoware
+(mission → behavior → trajectory follower → vehicle gate); CARLA only simulates
+the world — its traffic-manager autopilot is off. Per-town autonomous-drive
+validation: `scripts/test_all_towns.sh` → **`docs/town_test_results.md`**.
+Real-world maps (no CARLA): `scripts/run_real_map_sim.sh` (planning simulator,
+same gateway/tablet tap-to-go; MGRS maps supported).
 
 ## What made it work (root causes, all baked into the script)
 
