@@ -441,9 +441,17 @@ class Bridge(Node):
         if tx is None or ty is None or not self.centerlines:
             self._res("goto: bad point"); return
         tx, ty = float(tx), float(ty)
-        # nearest centerline points to the tap, nearest-first (try a few in case
-        # the closest one sits on an unroutable/opposing lane segment)
-        near = sorted(self.centerlines, key=lambda p: math.hypot(p[0] - tx, p[1] - ty))[:5]
+        # spatially-DIVERSE candidates around the tap: the nearest N polyline
+        # points are usually the same spot on one lanelet -- if that lanelet is
+        # goal-ineligible (intersection interior etc.) all attempts fail. Pick
+        # the nearest, then the next ones at least 6 m apart, up to 4 spots.
+        ranked = sorted(self.centerlines, key=lambda p: math.hypot(p[0] - tx, p[1] - ty))
+        near = []
+        for p in ranked:
+            if all(math.hypot(p[0] - q[0], p[1] - q[1]) > 6.0 for q in near):
+                near.append(p)
+            if len(near) >= 4:
+                break
         self._res(f"goto ({tx:.0f},{ty:.0f}) -> snapped {math.hypot(near[0][0]-tx, near[0][1]-ty):.0f}m")
         self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
         for gx, gy, gtg in near:
