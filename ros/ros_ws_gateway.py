@@ -159,6 +159,10 @@ class Bridge(Node):
                                  lambda m: self._set("loc", m), tl)
         self.create_subscription(Trajectory, "/planning/scenario_planning/trajectory",
                                  lambda m: self._set("traj", m), 1)
+        from std_msgs.msg import String as _Str
+        self.create_subscription(_Str, "/multimode/mode",
+                                 lambda m: self._set("mmode", m), 1)
+        self.pub_inject = self.create_publisher(_Str, "/multimode/inject", 1)
         be = QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST)
         from sensor_msgs.msg import PointCloud2
         self.create_subscription(PointCloud2, "/localization/util/downsample/pointcloud",
@@ -312,6 +316,14 @@ class Bridge(Node):
                 self._goto(cmd[1], cmd[2])
             elif cmd == "respawn":
                 self._respawn()
+            elif cmd == "fail_lidar":
+                from std_msgs.msg import String as _Str
+                self.pub_inject.publish(_Str(data="lidar_fail"))
+                self._res("FAULT INJECTED: lidar -> multimode fallback")
+            elif cmd == "heal":
+                from std_msgs.msg import String as _Str
+                self.pub_inject.publish(_Str(data="clear"))
+                self._res("fault cleared -> auto mode selection")
             elif isinstance(cmd, tuple) and cmd[0] == "vehicle":
                 self._vehicle(cmd[1])
         except Exception as e:
@@ -561,8 +573,9 @@ class Bridge(Node):
             "source": "AUTOWARE_LIVE",
             "ego": ego,
             "localization": {"converged": converged and (loc_init == 3), "initState": loc_init,
-                             "mode": "LIDAR_GNSS" if lidar_ok else "UNAVAILABLE",
-                             "pipeline": "DUAL" if lidar_ok else "UNAVAILABLE", "ndtHz": round(ndt_hz, 1)},
+                             "mode": (s["mmode"][0].data if "mmode" in s
+                                      else ("LIDAR_GNSS" if lidar_ok else "UNAVAILABLE")),
+                             "pipeline": "DUAL" if lidar_ok else "FALLBACK", "ndtHz": round(ndt_hz, 1)},
             "operationMode": {"mode": OP_MODE.get(op, "UNKNOWN"), "raw": op, "autonomousAvailable": op_avail},
             "route": {"state": ROUTE_STATE.get(rstate, "UNKNOWN"), "raw": rstate,
                       "trajPoints": ntraj, "trajPath": traj_path},

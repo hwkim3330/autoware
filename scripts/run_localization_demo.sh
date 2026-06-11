@@ -114,6 +114,13 @@ SUDO docker cp "$REPO/container_patches/carla_ros.py" \
 SUDO docker exec autoware bash -lc \
   'for d in /root/autoware_map/Town*/; do echo "projector_type: local" > "$d/map_projector_info.yaml"; done' >/dev/null 2>&1
 
+# MULTIMODE localization (숭실대): the EKF consumes the supervisor's output
+# instead of NDT directly, so the supervisor can switch the localization source
+# by sensor availability (LIDAR_GNSS dual <-> GNSS_IMU fallback).
+SUDO docker exec autoware bash -lc \
+  "sed -i 's|value=\"/localization/pose_estimator/pose_with_covariance\"|value=\"/localization/multimode/pose_with_covariance\"|' \
+   /opt/autoware/share/tier4_localization_launch/launch/pose_twist_fusion_filter/pose_twist_fusion_filter.launch.xml" >/dev/null 2>&1
+
 # Cruise speed: planner global cap (default 4.17 m/s = 15 km/h). 8.33 = 30 km/h;
 # actual speed = min(this, lanelet speed_limit, curve/decel constraints).
 SUDO docker exec autoware bash -lc \
@@ -127,7 +134,7 @@ SUDO docker exec autoware bash -lc \
    /opt/autoware/share/autoware_carla_interface/autoware_carla_interface.launch.xml" >/dev/null 2>&1
 
 # Refresh the gateway + perception stub + helper scripts in the container.
-for f in ros_ws_gateway.py perception_stub.py find_spawn.py diag_route.py diag_connectivity.py; do
+for f in ros_ws_gateway.py perception_stub.py multimode_supervisor.py find_spawn.py diag_route.py diag_connectivity.py; do
   [ -f "$REPO/ros/$f" ] && SUDO docker cp "$REPO/ros/$f" autoware:/root/$f >/dev/null 2>&1
 done
 SUDO docker cp "$REPO/container_patches/roii_clean.rviz" autoware:/root/roii_clean.rviz >/dev/null 2>&1
@@ -207,6 +214,7 @@ echo "==> Start ROS->WebSocket gateway (tablet app) + rviz on the monitor"
 SUDO docker exec -d autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
   python3 /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1 &
+   python3 /root/multimode_supervisor.py --ros-args -p use_sim_time:=true > /tmp/multimode.log 2>&1 &
    export LANELET_OSM=/root/autoware_map/'$TOWN'/lanelet2_map.osm; export CARLA_SPAWN='"$SPAWN"'; export RVIZ_DISPLAY='"$DISP"'; python3 /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
 command -v adb >/dev/null && adb reverse tcp:8765 tcp:8765 >/dev/null 2>&1 || true
 # rviz on the host monitor (CARLA is RenderOffScreen, so the GPU display is free)
