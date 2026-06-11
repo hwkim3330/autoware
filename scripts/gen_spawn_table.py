@@ -63,7 +63,11 @@ def main():
     for town in towns:
         try:
             pts = load_pts(f"{MAPS}/{town}/lanelet2_map.osm")
-            world = client.load_world(town)
+            # runtime load_world segfaults CARLA on heavy maps -- reuse the
+            # current world when the server was booted into this town already.
+            world = client.get_world()
+            if not world.get_map().name.endswith(town):
+                world = client.load_world(town)
             sps = world.get_map().get_spawn_points()
         except Exception as e:
             print(f"{town}: ERROR {e}")
