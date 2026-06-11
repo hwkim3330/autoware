@@ -310,3 +310,35 @@ reset; it respawns but scenario_selector may stay stuck). One route per
 session is solid; for a new route, rerun the bring-up script (~4 min).
 Cameras fully off (launch nodes removed); perception_stub supplies empty
 objects + clear occupancy grid; 1 LiDAR (300k pts) is enough for NDT.
+
+## ALL-TOWN VALIDATION (2026-06-11)
+
+`scripts/test_all_towns.sh` runs the full bring-up + one autonomous drive per
+town and writes `docs/town_test_results.md`. Getting every town green required
+three more root-cause fixes on top of the Town04 breakthrough:
+
+1. **Boot CARLA directly into the target town.** The interface's runtime
+   `load_world()` segfaults CARLA (Signal 11) on heavy maps — Town03 never
+   came up because of this. `run_localization_demo.sh` now passes the town as
+   the UE4 startup map, so the interface's load_world is a same-map no-op.
+2. **CARLA-safe spawns.** Spawns picked purely from the lanelet osm can sit
+   inside obstacles — Town05's ego spawn returned None (`get_physics_control`
+   AttributeError). `scripts/gen_spawn_table.py` instead takes CARLA's own
+   `get_spawn_points()` (collision-free by construction) and scores each by
+   how many lanelet centerline points lie 40-90 m ahead within ~57° of the
+   heading (what the gateway's drive goal-search needs). `gen_all_spawns.sh`
+   boots each town and emits the table for the run script.
+3. **Town06/07 need the AdditionalMaps package** ("Map 'Town06' not found").
+   14.8 GB from `carla-releases.b-cdn.net/Linux/AdditionalMaps_0.9.16.tar.gz`
+   (the github.com release URL 404s), extracted over /opt/carla-simulator.
+
+Also: interface `timeout:=300` (big-town world loads exceed 120 s), and the
+gateway retries goal search without the heading filter when a town's
+centerlines are stored reversed (Town01).
+
+**Town03 remains unstable on this setup** (driver 535 + offscreen Low): it
+crashes or hangs the CARLA server even when booted directly — deferred.
+
+Process hygiene: stray CARLA zombies and leftover e2e stacks were the main
+source of "it worked before" flakiness — `scripts/status.sh` shows everything
+at a glance; the bring-up script kills/restarts everything it owns.
