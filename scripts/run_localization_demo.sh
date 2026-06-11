@@ -131,6 +131,9 @@ for f in ros_ws_gateway.py perception_stub.py find_spawn.py diag_route.py diag_c
   [ -f "$REPO/ros/$f" ] && SUDO docker cp "$REPO/ros/$f" autoware:/root/$f >/dev/null 2>&1
 done
 SUDO docker cp "$REPO/container_patches/roii_clean.rviz" autoware:/root/roii_clean.rviz >/dev/null 2>&1
+# KETI badge on the rviz vehicle model (replaces the Autoware hexagon logos)
+SUDO docker cp "$REPO/container_patches/lexus_keti.jpg" \
+  autoware:/opt/autoware/share/sample_vehicle_description/mesh/lexus.jpg >/dev/null 2>&1
 SUDO docker cp "$REPO/container_patches/autoware_no_camera.rviz" autoware:/root/autoware_no_camera.rviz >/dev/null 2>&1
 
 # Relax localization diag so autonomous engage isn't blocked by the
