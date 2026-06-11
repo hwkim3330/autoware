@@ -190,6 +190,9 @@ class Bridge(Node):
         self.teleop = {"v": 0.0, "steer": 0.0, "until": 0.0}
         self._teleop_armed = False
         self.create_timer(0.01, self._teleop_tick, callback_group=cbg)  # 100 Hz
+        # single thread owns ALL carla client calls (libcarla is not thread-safe)
+        self._carla_lock = threading.Lock()
+        threading.Thread(target=self._carla_loop, daemon=True).start()
 
     def _arm_teleop(self):
         for _ in range(3):
@@ -226,6 +229,32 @@ class Bridge(Node):
         except Exception:
             return None
 
+    def _carla_loop(self):
+        """Manual mode drives the CARLA actor directly: the Autoware chain turns
+        a negative-velocity command into BRAKE (reverse never reaches CARLA) and
+        the gate fights direct injection. ~30 Hz outruns the interface's own
+        apply_control, so manual forward/reverse is crisp."""
+        while True:
+            time.sleep(0.033)
+            with self.lock:
+                tp = dict(self.teleop)
+            if time.monotonic() > tp["until"]:
+                continue
+            try:
+                with self._carla_lock:
+                    ego = self._carla_ego()
+                    if ego is None:
+                        continue
+                    carla = self._carla_mod
+                    mag = min(abs(tp["v"]) / 6.0, 1.0) * 0.7
+                    ego.apply_control(carla.VehicleControl(
+                        throttle=mag if abs(tp["v"]) > 0.05 else 0.0,
+                        steer=max(-1.0, min(1.0, -tp["steer"] * 2.0)),
+                        brake=0.0 if abs(tp["v"]) > 0.05 else 0.4,
+                        reverse=tp["v"] < -0.05))
+            except Exception:
+                self._carla_ego_a = None
+
     def _teleop_tick(self):
         with self.lock:
             tp = dict(self.teleop)
@@ -241,27 +270,9 @@ class Bridge(Node):
         g = GearCommand(); g.stamp = now
         g.command = 20 if tp["v"] < -0.01 else 2
         self.pub_gear.publish(g)
-        # Manual = DIRECT CARLA control at ~50 Hz. The Autoware chain converts a
-        # negative-velocity command into BRAKE (reverse never reaches CARLA), and
-        # the gate fights direct injection. Driving the CARLA actor outruns the
-        # interface's own apply_control (~20 Hz), so manual fwd/rev "just works".
-        self._tt = getattr(self, "_tt", 0) + 1
-        if self._tt % 2:
-            return
-        ego = self._carla_ego()
-        if ego is None:
-            return
-        try:
-            carla = self._carla_mod
-            mag = min(abs(tp["v"]) / 6.0, 1.0) * 0.7
-            ctl = carla.VehicleControl(
-                throttle=mag if abs(tp["v"]) > 0.05 else 0.0,
-                steer=max(-1.0, min(1.0, -tp["steer"] * 2.0)),
-                brake=0.0 if abs(tp["v"]) > 0.05 else 0.4,
-                reverse=tp["v"] < -0.05)
-            ego.apply_control(ctl)
-        except Exception:
-            self._carla_ego_a = None
+        # Direct CARLA control happens in a DEDICATED thread (_carla_loop):
+        # libcarla is not thread-safe; calling it from the 100 Hz reentrant
+        # executor timer caused silent SIGSEGV crashes of the gateway.
 
     def _set(self, k, m):
         with self.lock:
@@ -429,21 +440,19 @@ class Bridge(Node):
         self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
         time.sleep(1.0)
         try:
-            import carla
             x, y, z, roll, pitch, yaw = [float(v) for v in CARLA_SPAWN.split(",")]
-            cl = carla.Client("localhost", 2000); cl.set_timeout(10.0)
-            world = cl.get_world()
-            ego = next((a for a in world.get_actors().filter("vehicle.*")
-                        if a.attributes.get("role_name") == "ego_vehicle"), None)
-            if ego is None:
-                self._res("respawn: ego not found"); return
-            tf = carla.Transform(carla.Location(x=x, y=y, z=z + 0.3),
-                                 carla.Rotation(roll=roll, pitch=pitch, yaw=yaw))
-            for _ in range(3):   # sync mode can swallow one set_transform
-                ego.set_target_velocity(carla.Vector3D(0, 0, 0))
-                ego.set_angular_velocity(carla.Vector3D(0, 0, 0))
-                ego.set_transform(tf)
-                time.sleep(0.3)
+            with self._carla_lock:
+                ego = self._carla_ego()
+                if ego is None:
+                    self._res("respawn: ego not found"); return
+                carla = self._carla_mod
+                tf = carla.Transform(carla.Location(x=x, y=y, z=z + 0.3),
+                                     carla.Rotation(roll=roll, pitch=pitch, yaw=yaw))
+                for _ in range(3):   # sync mode can swallow one set_transform
+                    ego.set_target_velocity(carla.Vector3D(0, 0, 0))
+                    ego.set_angular_velocity(carla.Vector3D(0, 0, 0))
+                    ego.set_transform(tf)
+                    time.sleep(0.3)
             self._res("teleported; re-seeding localization")
         except Exception as e:
             self._res(f"respawn error: {e}"); return
