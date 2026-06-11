@@ -222,10 +222,13 @@ SUDO docker exec autoware bash -lc \
    echo -n 'TF map->base_link : '; timeout 8 ros2 run tf2_ros tf2_echo map base_link 2>/dev/null|grep -m1 Translation"
 
 echo "==> Start ROS->WebSocket gateway (tablet app) + rviz on the monitor"
+# dedupe helpers in a SEPARATE exec: a pkill inside the same shell string as the
+# daemon commands matches (and kills) that very shell.
+SUDO docker exec autoware bash -c 'pkill -9 -f perception_stub.py; pkill -9 -f multimode_supervisor.py; pkill -9 -f ros_ws_gateway.py; exit 0' >/dev/null 2>&1
+sleep 1
 SUDO docker exec -d autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
-  pkill -9 -f '[p]erception_stub|[m]ultimode_supervisor|[r]os_ws_gateway' 2>/dev/null; sleep 1; \
-   python3 /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1 &
+  python3 /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1 &
    python3 /root/multimode_supervisor.py --ros-args -p use_sim_time:=true > /tmp/multimode.log 2>&1 &
    export LANELET_OSM=/root/autoware_map/'$TOWN'/lanelet2_map.osm; export CARLA_SPAWN='"$SPAWN"'; export RVIZ_DISPLAY='"$DISP"'; python3 /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
 command -v adb >/dev/null && adb reverse tcp:8765 tcp:8765 >/dev/null 2>&1 || true
