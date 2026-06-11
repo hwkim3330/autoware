@@ -134,7 +134,7 @@ SUDO docker exec autoware bash -lc \
    /opt/autoware/share/autoware_carla_interface/autoware_carla_interface.launch.xml" >/dev/null 2>&1
 
 # Refresh the gateway + perception stub + helper scripts in the container.
-for f in ros_ws_gateway.py perception_stub.py multimode_supervisor.py find_spawn.py diag_route.py diag_connectivity.py; do
+for f in ros_ws_gateway.py perception_stub.py multimode_supervisor.py traj_smoke.py find_spawn.py diag_route.py diag_connectivity.py; do
   [ -f "$REPO/ros/$f" ] && SUDO docker cp "$REPO/ros/$f" autoware:/root/$f >/dev/null 2>&1
 done
 SUDO docker cp "$REPO/container_patches/roii_clean.rviz" autoware:/root/roii_clean.rviz >/dev/null 2>&1
@@ -190,13 +190,16 @@ for e2etry in 1 2 3; do
     SUDO docker restart autoware >/dev/null 2>&1 || true; sleep 6
     continue
   fi
-  # deaths also happen 60-150 s in (late component loads) -- the respawned
-  # container deadlocks (behavior waits for scenario, a core spins). Give the
-  # stack the full settle window, then check ONCE more before accepting it.
-  sleep 80
-  DIED=$(SUDO docker exec autoware bash -lc "grep -ac 'process has died' /tmp/e2e.log" 2>/dev/null | tr -dc 0-9)
-  [ "${DIED:-0}" = "0" ] && break
-  echo "    a component died late ($DIED) -- clean retry"
+  sleep 60
+  # THE acceptance gate: can the stack actually produce a trajectory? Component
+  # deaths can strike at any time (even on route arrival) and leave a deadlocked
+  # respawn -- time-based checks miss them. Set a test route, demand a
+  # trajectory, clear. Fail -> full e2e retry.
+  SUDO docker cp "$REPO/ros/traj_smoke.py" autoware:/root/traj_smoke.py >/dev/null 2>&1
+  SMOKE=$(SUDO docker exec autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      timeout 150 python3 /root/traj_smoke.py /root/autoware_map/$TOWN/lanelet2_map.osm 2>/dev/null" | tail -1)
+  echo "    $SMOKE"
+  case "$SMOKE" in *"SMOKE: OK"*) break ;; esac
+  echo "    trajectory smoke test FAILED -- clean retry"
   SUDO docker restart autoware >/dev/null 2>&1 || true; sleep 6
 done
 
