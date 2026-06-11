@@ -136,6 +136,10 @@ SUDO docker cp "$REPO/container_patches/autoware_no_camera.rviz" autoware:/root/
 LOCYAML=/opt/autoware/share/autoware_launch/config/system/diagnostics/localization.yaml
 SUDO docker exec autoware bash -lc \
   "sed -i '/link: \/autoware\/localization\/accuracy }/d; /link: \/autoware\/localization\/sensor_fusion_status }/d' $LOCYAML" >/dev/null 2>&1 || true
+# CARLA mode uses its own aggregated graph file -- relax the same leaves there.
+CARLAYAML=/opt/autoware/share/autoware_launch/config/system/diagnostics/autoware-carla.yaml
+SUDO docker exec autoware bash -lc \
+  "sed -i '/link: \/autoware\/localization\/accuracy }/d; /link: \/autoware\/localization\/sensor_fusion_status }/d' $CARLAYAML" >/dev/null 2>&1 || true
 CTLYAML=/opt/autoware/share/autoware_launch/config/system/diagnostics/control.yaml
 SUDO docker exec autoware bash -lc \
   "sed -i '/link: \/autoware\/control\/topic_rate_check\/trajectory_follower }/d; /link: \/autoware\/control\/topic_rate_check\/control_command }/d; /link: \/autoware\/control\/performance_monitoring\/lane_departure }/d; /link: \/autoware\/control\/performance_monitoring\/control_state }/d' $CTLYAML" >/dev/null 2>&1 || true
