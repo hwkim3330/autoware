@@ -138,16 +138,17 @@ for f in ros_ws_gateway.py perception_stub.py multimode_supervisor.py find_spawn
   [ -f "$REPO/ros/$f" ] && SUDO docker cp "$REPO/ros/$f" autoware:/root/$f >/dev/null 2>&1
 done
 SUDO docker cp "$REPO/container_patches/roii_clean.rviz" autoware:/root/roii_clean.rviz >/dev/null 2>&1
-# rviz vehicle = the actual ROii shuttle (textured collada converted from
-# roii.glb, pre-rotated by the inverse of the URDF's mesh rpy). lexus.dae.bak
-# stays in the container for manual revert.
-SUDO docker cp "$REPO/container_patches/roii_vehicle.dae" \
+# rviz vehicle: DEFAULT = KETI-badged lexus; the ROii shuttle mesh is staged
+# for the tablet's vehicle-switch command ({cmd:vehicle, model:roii}).
+SUDO docker cp "$REPO/container_patches/lexus_stock.dae" \
   autoware:/opt/autoware/share/sample_vehicle_description/mesh/lexus.dae >/dev/null 2>&1
+SUDO docker cp "$REPO/container_patches/lexus_stock.dae" \
+  autoware:/opt/autoware/share/sample_vehicle_description/mesh/lexus.dae.bak >/dev/null 2>&1
 SUDO docker cp "$REPO/container_patches/roii_vehicle.dae" \
   autoware:/opt/autoware/share/sample_vehicle_description/mesh/roii_vehicle.dae.src >/dev/null 2>&1
 SUDO docker cp "$REPO/container_patches/roii_tex.png" \
   autoware:/opt/autoware/share/sample_vehicle_description/mesh/roii_tex.png >/dev/null 2>&1
-# (KETI-badged lexus texture also installed, used if lexus.dae is restored)
+# (KETI-badged lexus texture)
 SUDO docker cp "$REPO/container_patches/lexus_keti.jpg" \
   autoware:/opt/autoware/share/sample_vehicle_description/mesh/lexus.jpg >/dev/null 2>&1
 SUDO docker cp "$REPO/container_patches/autoware_no_camera.rviz" autoware:/root/autoware_no_camera.rviz >/dev/null 2>&1
