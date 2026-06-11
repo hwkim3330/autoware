@@ -48,6 +48,10 @@ from tier4_control_msgs.srv import SetPause
 
 WS_HOST, WS_PORT, WS_PATH = "0.0.0.0", 8765, "/ws"
 MAP_OSM = os.environ.get("LANELET_OSM", "/root/autoware_map/Town01/lanelet2_map.osm")
+# CARLA spawn "x, y, z, roll, pitch, yaw" (CARLA coords) -- for the respawn cmd
+CARLA_SPAWN = os.environ.get("CARLA_SPAWN", "")
+RVIZ_DISPLAY = os.environ.get("RVIZ_DISPLAY", ":1")
+MESH_DIR = "/opt/autoware/share/sample_vehicle_description/mesh"
 
 SENSOR_PARTS = {
     "lidar": ["FrontLeftLidar", "FrontRightLidar", "FrontCenterLidar", "RearCenterLidar"],
@@ -205,6 +209,23 @@ class Bridge(Node):
         if not self._teleop_armed:
             self._arm_teleop()
 
+    def _carla_ego(self):
+        """Lazy CARLA client + ego handle for direct manual control."""
+        try:
+            import carla
+            if not hasattr(self, "_carla_cl"):
+                self._carla_cl = carla.Client("localhost", 2000)
+                self._carla_cl.set_timeout(5.0)
+                self._carla_mod = carla
+            ego = getattr(self, "_carla_ego_a", None)
+            if ego is None or not ego.is_alive:
+                ego = next((a for a in self._carla_cl.get_world().get_actors().filter("vehicle.*")
+                            if a.attributes.get("role_name") == "ego_vehicle"), None)
+                self._carla_ego_a = ego
+            return ego
+        except Exception:
+            return None
+
     def _teleop_tick(self):
         with self.lock:
             tp = dict(self.teleop)
@@ -220,6 +241,27 @@ class Bridge(Node):
         g = GearCommand(); g.stamp = now
         g.command = 20 if tp["v"] < -0.01 else 2
         self.pub_gear.publish(g)
+        # Manual = DIRECT CARLA control at ~50 Hz. The Autoware chain converts a
+        # negative-velocity command into BRAKE (reverse never reaches CARLA), and
+        # the gate fights direct injection. Driving the CARLA actor outruns the
+        # interface's own apply_control (~20 Hz), so manual fwd/rev "just works".
+        self._tt = getattr(self, "_tt", 0) + 1
+        if self._tt % 2:
+            return
+        ego = self._carla_ego()
+        if ego is None:
+            return
+        try:
+            carla = self._carla_mod
+            mag = min(abs(tp["v"]) / 6.0, 1.0) * 0.7
+            ctl = carla.VehicleControl(
+                throttle=mag if abs(tp["v"]) > 0.05 else 0.0,
+                steer=max(-1.0, min(1.0, -tp["steer"] * 2.0)),
+                brake=0.0 if abs(tp["v"]) > 0.05 else 0.4,
+                reverse=tp["v"] < -0.05)
+            ego.apply_control(ctl)
+        except Exception:
+            self._carla_ego_a = None
 
     def _set(self, k, m):
         with self.lock:
@@ -257,6 +299,10 @@ class Bridge(Node):
                 self._drive()
             elif isinstance(cmd, tuple) and cmd[0] == "goto":
                 self._goto(cmd[1], cmd[2])
+            elif cmd == "respawn":
+                self._respawn()
+            elif isinstance(cmd, tuple) and cmd[0] == "vehicle":
+                self._vehicle(cmd[1])
         except Exception as e:
             self._res(f"error: {e}")
 
@@ -369,6 +415,88 @@ class Bridge(Node):
             self._engage(None, None); return
         self._res("goto: no routable goal near tap")
 
+    def _respawn(self):
+        """Teleport the CARLA ego back to the spawn point and re-seed the
+        localization -- recovers from wall crashes without a full relaunch."""
+        if not CARLA_SPAWN:
+            self._res("respawn: no CARLA_SPAWN configured"); return
+        # 1) STOP + route clear FIRST -- otherwise autonomous keeps driving the
+        #    teleported car away while we re-seed localization.
+        try:
+            self._call(self.cli_stop, ChangeOperationMode.Request(), timeout=6.0)
+        except Exception:
+            pass
+        self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
+        time.sleep(1.0)
+        try:
+            import carla
+            x, y, z, roll, pitch, yaw = [float(v) for v in CARLA_SPAWN.split(",")]
+            cl = carla.Client("localhost", 2000); cl.set_timeout(10.0)
+            world = cl.get_world()
+            ego = next((a for a in world.get_actors().filter("vehicle.*")
+                        if a.attributes.get("role_name") == "ego_vehicle"), None)
+            if ego is None:
+                self._res("respawn: ego not found"); return
+            tf = carla.Transform(carla.Location(x=x, y=y, z=z + 0.3),
+                                 carla.Rotation(roll=roll, pitch=pitch, yaw=yaw))
+            for _ in range(3):   # sync mode can swallow one set_transform
+                ego.set_target_velocity(carla.Vector3D(0, 0, 0))
+                ego.set_angular_velocity(carla.Vector3D(0, 0, 0))
+                ego.set_transform(tf)
+                time.sleep(0.3)
+            self._res("teleported; re-seeding localization")
+        except Exception as e:
+            self._res(f"respawn error: {e}"); return
+        time.sleep(2.0)   # let the lidar see the new surroundings
+        # 2) initialpose 재시딩 (CARLA -> Autoware: y/yaw 부호 반전), 3회 발행
+        from geometry_msgs.msg import PoseWithCovarianceStamped
+        if not hasattr(self, "pub_init"):
+            self.pub_init = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 1)
+            time.sleep(0.5)
+        awyaw = math.radians(-yaw)
+        for _ in range(3):
+            m = PoseWithCovarianceStamped()
+            m.header.frame_id = "map"
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.pose.pose.position.x = x
+            m.pose.pose.position.y = -y
+            m.pose.pose.orientation.z = math.sin(awyaw / 2)
+            m.pose.pose.orientation.w = math.cos(awyaw / 2)
+            m.pose.covariance[0] = m.pose.covariance[7] = 0.25
+            m.pose.covariance[35] = 0.068
+            self.pub_init.publish(m)
+            time.sleep(1.5)
+        # 3) 수렴 확인
+        for i in range(10):
+            time.sleep(1.0)
+            with self.lock:
+                od = self.s.get("odom")
+            if od:
+                p = od[0].pose.pose.position
+                if math.hypot(p.x - x, p.y - (-y)) < 5.0:
+                    self._res("respawn OK -- at spawn, ready"); return
+        self._res("respawn: teleported but localization not converged (try again)")
+
+    def _vehicle(self, model):
+        """Swap the rviz vehicle model (roii shuttle <-> KETI-badged lexus)
+        and restart rviz. Runs as root inside the container."""
+        import shutil, subprocess
+        try:
+            if model == "roii":
+                shutil.copy(f"{MESH_DIR}/roii_vehicle.dae.src", f"{MESH_DIR}/lexus.dae")
+            else:
+                shutil.copy(f"{MESH_DIR}/lexus.dae.bak", f"{MESH_DIR}/lexus.dae")
+            subprocess.run(["pkill", "-f", "rviz2"], check=False)
+            time.sleep(1.5)
+            env = dict(os.environ, DISPLAY=RVIZ_DISPLAY, XAUTHORITY="/root/.Xauthority")
+            subprocess.Popen(
+                ["bash", "-lc",
+                 "source /opt/autoware/setup.bash; rviz2 -d /root/autoware_no_camera.rviz > /tmp/rviz.log 2>&1"],
+                env=env, start_new_session=True)
+            self._res(f"vehicle -> {model} (rviz restarting)")
+        except Exception as e:
+            self._res(f"vehicle error: {e}")
+
     def frame(self):
         with self.lock:
             s = dict(self.s); lt = list(self.lidar_t); cmd_res = self.last_cmd_result
@@ -465,6 +593,9 @@ async def handler(ws):
                 elif cmd == "goto":
                     BRIDGE.enqueue(("goto", data.get("x"), data.get("y")))
                     print(f"[cmd] goto {data.get('x')},{data.get('y')}")
+                elif cmd == "vehicle":
+                    BRIDGE.enqueue(("vehicle", data.get("model", "roii")))
+                    print(f"[cmd] vehicle {data.get('model')}")
                 elif cmd:
                     BRIDGE.enqueue(cmd)
                     print(f"[cmd] {cmd}")

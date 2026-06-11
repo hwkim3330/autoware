@@ -136,6 +136,8 @@ SUDO docker cp "$REPO/container_patches/roii_clean.rviz" autoware:/root/roii_cle
 # stays in the container for manual revert.
 SUDO docker cp "$REPO/container_patches/roii_vehicle.dae" \
   autoware:/opt/autoware/share/sample_vehicle_description/mesh/lexus.dae >/dev/null 2>&1
+SUDO docker cp "$REPO/container_patches/roii_vehicle.dae" \
+  autoware:/opt/autoware/share/sample_vehicle_description/mesh/roii_vehicle.dae.src >/dev/null 2>&1
 SUDO docker cp "$REPO/container_patches/roii_tex.png" \
   autoware:/opt/autoware/share/sample_vehicle_description/mesh/roii_tex.png >/dev/null 2>&1
 # (KETI-badged lexus texture also installed, used if lexus.dae is restored)
@@ -205,7 +207,7 @@ echo "==> Start ROS->WebSocket gateway (tablet app) + rviz on the monitor"
 SUDO docker exec -d autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
   python3 /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1 &
-   export LANELET_OSM=/root/autoware_map/'$TOWN'/lanelet2_map.osm; python3 /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
+   export LANELET_OSM=/root/autoware_map/'$TOWN'/lanelet2_map.osm; export CARLA_SPAWN='"$SPAWN"'; export RVIZ_DISPLAY='"$DISP"'; python3 /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
 command -v adb >/dev/null && adb reverse tcp:8765 tcp:8765 >/dev/null 2>&1 || true
 # rviz on the host monitor (CARLA is RenderOffScreen, so the GPU display is free)
 DISPLAY=$DISP XAUTHORITY=$XA xhost +local: >/dev/null 2>&1 || true
