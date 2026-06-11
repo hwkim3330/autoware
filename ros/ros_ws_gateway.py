@@ -66,7 +66,7 @@ def load_centerlines(path):
     try:
         txt = open(path).read().replace("'", '"')  # JOSM single quotes
     except Exception:
-        return []
+        return [], []
     nd = {}
     for m in re.finditer(r'<node id="(-?\d+)"[^>]*>(.*?)</node>', txt, re.S):
         b = m.group(2)
@@ -95,7 +95,7 @@ def load_centerlines(path):
         refs = [r for r in re.findall(r'<nd ref="(-?\d+)"', m.group(2)) if r in nd]
         if refs:
             wy[m.group(1)] = [nd[r] for r in refs]
-    pts = []
+    pts, polys = [], []
     for m in re.finditer(r'<relation id="(-?\d+)"[^>]*>(.*?)</relation>', txt, re.S):
         b = m.group(2)
         if 'v="lanelet"' not in b:
@@ -119,7 +119,14 @@ def load_centerlines(path):
             kk = max(i - 1, 0)
             tg = math.atan2(cl[j][1] - cl[kk][1], cl[j][0] - cl[kk][0])
             pts.append((cl[i][0], cl[i][1], tg))
-    return pts
+        # per-lanelet polyline (downsampled) so the tablet can stroke ROADS
+        # instead of dots — Tesla-style continuous road rendering.
+        step = max(1, len(cl) // 20)
+        poly = cl[::step]
+        if poly[-1] != cl[-1]:
+            poly.append(cl[-1])
+        polys.append([[round(p[0], 1), round(p[1], 1)] for p in poly])
+    return pts, polys
 
 
 class Bridge(Node):
@@ -131,8 +138,9 @@ class Bridge(Node):
         self.lidar_t = []
         self.cmds = deque()
         self.last_cmd_result = ""
-        self.centerlines = load_centerlines(MAP_OSM)
-        self.get_logger().info(f"loaded {len(self.centerlines)} centerline points")
+        self.centerlines, self.lane_polys = load_centerlines(MAP_OSM)
+        self.get_logger().info(
+            f"loaded {len(self.centerlines)} centerline points, {len(self.lane_polys)} lane polylines")
 
         tl = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                         reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST)
@@ -436,7 +444,8 @@ async def handler(ws):
             cl = BRIDGE.centerlines
             step = max(1, len(cl) // 4000)
             lanes = [[round(x, 1), round(y, 1)] for x, y, _ in cl[::step]]
-            await ws.send(json.dumps({"type": "lanes", "pts": lanes}))
+            await ws.send(json.dumps({"type": "lanes", "pts": lanes,
+                                      "polys": BRIDGE.lane_polys}))
     except Exception as e:
         print("lanes send error:", e)
     try:

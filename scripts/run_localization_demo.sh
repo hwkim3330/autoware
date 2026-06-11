@@ -87,6 +87,8 @@ if [ "${LIDARS:-4}" = "4" ]; then
     autoware:/opt/autoware/share/carla_sensor_kit_description/config/sensor_kit_calibration.yaml >/dev/null 2>&1
   SUDO docker cp "$REPO/container_patches/carla_wrapper.py" \
     autoware:/opt/autoware/lib/python3.10/site-packages/autoware_carla_interface/modules/carla_wrapper.py >/dev/null 2>&1
+  SUDO docker cp "$REPO/container_patches/sensor_kit.xacro" \
+    autoware:/opt/autoware/share/carla_sensor_kit_description/urdf/sensor_kit.xacro >/dev/null 2>&1
 else
   SUDO docker cp "$REPO/config/sensor_mapping_lidar_only.yaml" \
     autoware:/opt/autoware/share/autoware_carla_interface/config/sensor_mapping.yaml >/dev/null 2>&1
