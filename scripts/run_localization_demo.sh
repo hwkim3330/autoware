@@ -70,18 +70,22 @@ seed_initialpose() {
   echo "    initialpose seeded: aw=($SX, $AWY, ${AWYAW}deg)"
 }
 
+boot_carla() {
+  SUDO pkill -9 -f CarlaUE4-Linux-Shipping 2>/dev/null; sleep 4
+  for attempt in 1 2 3 4 5; do
+    cd "$CARLA_DIR"
+    setsid taskset -c 0,8 env DISPLAY="$DISP" XAUTHORITY="$XA" \
+      ./CarlaUE4-Linux-Shipping "$TOWN" -RenderOffScreen -quality-level=Low \
+      -nosound -carla-rpc-port=2000 </dev/null >/tmp/carla.log 2>&1 & disown
+    up=0; for i in $(seq 1 25); do sleep 3; ss -tlnp 2>/dev/null | grep -q :2000 && { up=1; break; }; done
+    if [ $up -eq 1 ]; then sleep 15; ss -tlnp 2>/dev/null | grep -q :2000 && { echo "    CARLA up (attempt $attempt)"; return 0; }; fi
+    echo "    boot crashed, retrying ($attempt)"; SUDO pkill -9 -f CarlaUE4-Linux-Shipping 2>/dev/null; sleep 4
+  done
+  return 1
+}
+
 echo "==> [1/5] Boot CARLA on cores 0-5 (retry until RPC stays up)"
-SUDO pkill -9 -f CarlaUE4-Linux-Shipping 2>/dev/null; sleep 4
-for attempt in 1 2 3 4 5; do
-  cd "$CARLA_DIR"
-  setsid taskset -c 0,8 env DISPLAY="$DISP" XAUTHORITY="$XA" \
-    ./CarlaUE4-Linux-Shipping "$TOWN" -RenderOffScreen -quality-level=Low \
-    -nosound -carla-rpc-port=2000 </dev/null >/tmp/carla.log 2>&1 & disown
-  up=0; for i in $(seq 1 25); do sleep 3; ss -tlnp 2>/dev/null | grep -q :2000 && { up=1; break; }; done
-  if [ $up -eq 1 ]; then sleep 15; ss -tlnp 2>/dev/null | grep -q :2000 && { echo "    CARLA up (attempt $attempt)"; break; }; fi
-  echo "    boot crashed, retrying ($attempt)"; SUDO pkill -9 -f CarlaUE4-Linux-Shipping 2>/dev/null; sleep 4
-done
-ss -tlnp 2>/dev/null | grep -q :2000 || { echo "CARLA failed to boot"; exit 1; }
+boot_carla || { echo "CARLA failed to boot"; exit 1; }
 SUDO renice -n -10 -p "$(pgrep -f CarlaUE4-Linux-Shipping | head -1)" >/dev/null 2>&1
 
 echo "==> [2/5] Pin Autoware container to cores 6-15, install configs (LIDARS=${LIDARS:-1})"
@@ -185,6 +189,11 @@ SUDO docker restart autoware >/dev/null 2>&1 || true; sleep 6
 # launch never shows "process has died" -- so launch, check, and retry e2e
 # (container restart included) until the bring-up is death-free.
 for e2etry in 1 2 3; do
+  # a dying interface can segfault CARLA -- verify the simulator before relaunch
+  if ! ss -tlnp 2>/dev/null | grep -q :2000; then
+    echo "    CARLA died with the previous attempt -- rebooting it"
+    boot_carla || { echo "CARLA failed to boot"; exit 1; }
+  fi
   echo "==> [4/5] Launch Autoware e2e (attempt $e2etry)"
   SUDO docker exec -d autoware bash -lc \
     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash && \
