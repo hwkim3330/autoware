@@ -311,7 +311,10 @@ class Bridge(Node):
             self.lidar_t = [t for t in self.lidar_t if now - t < 3.0]
 
     def enqueue(self, cmd):
+        # Latest intent wins: a new command REPLACES anything still queued
+        # (taps piling up made the gateway feel unresponsive for minutes).
         with self.lock:
+            self.cmds.clear()
             self.cmds.append(cmd)
 
     # ---- command execution (runs in ROS executor thread via timer) ----
@@ -388,7 +391,7 @@ class Bridge(Node):
         order = cand[len(cand) // 3: len(cand) // 3 + 4] + cand[:4]
         self._res(f"finding route ({len(cand)} cand)")
         self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
-        for d, gx, gy, gtg in order:
+        for d, gx, gy, gtg in order[:5]:
             # try the stored tangent AND its 180-deg flip: converted maps may
             # store boundary roles swapped, so the tangent can be anti-parallel
             # to the lane -- the planner rejects those instantly (cheap retry).
@@ -412,12 +415,12 @@ class Bridge(Node):
         self._res(f"route set{tag}; engaging")
         # The trajectory appears ~2-3 s after the route and autonomous mode only
         # becomes AVAILABLE then -- retry the engage until it sticks (~20 s).
-        for i in range(10):
+        for i in range(6):
             time.sleep(2.0)
             ra = self._call(self.cli_auto, ChangeOperationMode.Request())
             if ra and ra.status.success:
                 self._res("AUTONOMOUS"); return
-            self._res(f"engaging... ({i + 1}/10)")
+            self._res(f"engaging... ({i + 1}/6)")
         self._res(f"route set, engage failed: {ra.status.message if ra else 'no resp'}")
 
     def _set_route_to(self, gx, gy, gtg):
@@ -440,7 +443,7 @@ class Bridge(Node):
         tx, ty = float(tx), float(ty)
         # nearest centerline points to the tap, nearest-first (try a few in case
         # the closest one sits on an unroutable/opposing lane segment)
-        near = sorted(self.centerlines, key=lambda p: math.hypot(p[0] - tx, p[1] - ty))[:8]
+        near = sorted(self.centerlines, key=lambda p: math.hypot(p[0] - tx, p[1] - ty))[:5]
         self._res(f"goto ({tx:.0f},{ty:.0f}) -> snapped {math.hypot(near[0][0]-tx, near[0][1]-ty):.0f}m")
         self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
         for gx, gy, gtg in near:
