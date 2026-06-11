@@ -305,9 +305,13 @@ class Bridge(Node):
         self._res(f"finding route ({len(cand)} cand)")
         self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
         for d, gx, gy, gtg in order:
-            r = self._set_route_to(gx, gy, gtg)
-            if (r and r.status.success) or self._route_is_set():
-                self._engage(gx, gy); return
+            # try the stored tangent AND its 180-deg flip: converted maps may
+            # store boundary roles swapped, so the tangent can be anti-parallel
+            # to the lane -- the planner rejects those instantly (cheap retry).
+            for g2 in (gtg, gtg + math.pi):
+                r = self._set_route_to(gx, gy, g2)
+                if (r and r.status.success) or self._route_is_set():
+                    self._engage(gx, gy); return
         # set_route_points can answer late; give the planner a moment, then check.
         time.sleep(2.0)
         if self._route_is_set():
@@ -356,9 +360,10 @@ class Bridge(Node):
         self._res(f"goto ({tx:.0f},{ty:.0f}) -> snapped {math.hypot(near[0][0]-tx, near[0][1]-ty):.0f}m")
         self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
         for gx, gy, gtg in near:
-            r = self._set_route_to(gx, gy, gtg)
-            if (r and r.status.success) or self._route_is_set():
-                self._engage(gx, gy); return
+            for g2 in (gtg, gtg + math.pi):   # tangent may be anti-parallel
+                r = self._set_route_to(gx, gy, g2)
+                if (r and r.status.success) or self._route_is_set():
+                    self._engage(gx, gy); return
         time.sleep(2.0)
         if self._route_is_set():
             self._engage(None, None); return
