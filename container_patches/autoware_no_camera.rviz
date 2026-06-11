@@ -3856,23 +3856,7 @@ Visualization Manager:
   Value: true
   Views:
     Current:
-      Angle: 0
-      Class: rviz_default_plugins/TopDownOrtho
-      Enable Stereo Rendering:
-        Stereo Eye Separation: 0.05999999865889549
-        Stereo Focal Distance: 1
-        Swap Stereo Eyes: false
-        Value: false
-      Invert Z Axis: false
-      Name: Current View
-      Near Clip Distance: 0.009999999776482582
-      Scale: 10
-      Target Frame: viewer
-      Value: TopDownOrtho (rviz_default_plugins)
-      X: 0
-      Y: 0
-    Saved:
-    - Class: rviz_default_plugins/ThirdPersonFollower
+      Class: rviz_default_plugins/ThirdPersonFollower
       Distance: 18
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
@@ -3886,12 +3870,13 @@ Visualization Manager:
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
-      Name: ThirdPersonFollower
+      Name: ChaseCam
       Near Clip Distance: 0.009999999776482582
       Pitch: 0.20000000298023224
       Target Frame: base_link
       Value: ThirdPersonFollower (rviz)
       Yaw: 3.141592025756836
+    Saved:
     - Angle: 0
       Class: rviz_default_plugins/TopDownOrtho
       Enable Stereo Rendering:
@@ -3900,10 +3885,10 @@ Visualization Manager:
         Swap Stereo Eyes: false
         Value: false
       Invert Z Axis: false
-      Name: TopDownOrtho
+      Name: TopDown
       Near Clip Distance: 0.009999999776482582
       Scale: 10
-      Target Frame: viewer
+      Target Frame: base_link
       Value: TopDownOrtho (rviz)
       X: 0
       Y: 0
