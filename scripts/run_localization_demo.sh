@@ -60,6 +60,16 @@ XA=$(tr '\0' '\n' </proc/$GS/environ | grep '^XAUTHORITY=' | cut -d= -f2)
 # kernel net namespace, so setting it here applies inside the container too.
 SUDO sysctl -w net.core.rmem_max=33554432 net.core.wmem_max=33554432 >/dev/null 2>&1 || true
 
+seed_initialpose() {
+  read -r SX SY SZ _ _ SYAW <<< "$(echo "$SPAWN" | tr -d ',')"
+  [ "$SPAWN" = "None" ] && return 0
+  AWY=$(python3 -c "print(-($SY))"); AWYAW=$(python3 -c "print(-($SYAW))")
+  QZ=$(python3 -c "import math;print(math.sin(math.radians($AWYAW)/2))")
+  QW=$(python3 -c "import math;print(math.cos(math.radians($AWYAW)/2))")
+  SUDO docker exec autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped      '{header: {frame_id: map}, pose: {pose: {position: {x: $SX, y: $AWY, z: 0.0},        orientation: {z: $QZ, w: $QW}},        covariance: [0.25,0,0,0,0,0, 0,0.25,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0.068]}}'"      >/dev/null 2>&1
+  echo "    initialpose seeded: aw=($SX, $AWY, ${AWYAW}deg)"
+}
+
 echo "==> [1/5] Boot CARLA on cores 0-5 (retry until RPC stays up)"
 SUDO pkill -9 -f CarlaUE4-Linux-Shipping 2>/dev/null; sleep 4
 for attempt in 1 2 3 4 5; do
@@ -190,7 +200,8 @@ for e2etry in 1 2 3; do
     SUDO docker restart autoware >/dev/null 2>&1 || true; sleep 6
     continue
   fi
-  sleep 60
+  seed_initialpose
+  sleep 30
   # THE acceptance gate: can the stack actually produce a trajectory? Component
   # deaths can strike at any time (even on route arrival) and leave a deadlocked
   # respawn -- time-based checks miss them. Set a test route, demand a
@@ -204,17 +215,7 @@ for e2etry in 1 2 3; do
 done
 
 echo "==> [5/5] Waiting for localization to converge..."
-# Seed NDT with the EXACT known spawn pose. On symmetric roads (divided
-# highways) NDT can converge 180-deg flipped -> start-lanelet matching fails
-# and every route comes back empty. Deterministic init kills that flakiness.
-read -r SX SY SZ _ _ SYAW <<< "$(echo "$SPAWN" | tr -d ',')"
-if [ "$SPAWN" != "None" ]; then
-  AWY=$(python3 -c "print(-($SY))"); AWYAW=$(python3 -c "print(-($SYAW))")
-  QZ=$(python3 -c "import math;print(math.sin(math.radians($AWYAW)/2))")
-  QW=$(python3 -c "import math;print(math.cos(math.radians($AWYAW)/2))")
-  SUDO docker exec autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped      '{header: {frame_id: map}, pose: {pose: {position: {x: $SX, y: $AWY, z: 0.0},        orientation: {z: $QZ, w: $QW}},        covariance: [0.25,0,0,0,0,0, 0,0.25,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0.068]}}'"      >/dev/null 2>&1
-  echo "    initialpose seeded: aw=($SX, $AWY, ${AWYAW}deg)"
-fi
+# (initialpose already seeded inside the e2e retry loop)
 sleep 30
 SUDO docker exec autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
@@ -234,6 +235,10 @@ SUDO docker exec -d autoware bash -lc \
   python3 /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1 &
    python3 /root/multimode_supervisor.py --ros-args -p use_sim_time:=true > /tmp/multimode.log 2>&1 &
    export LANELET_OSM=/root/autoware_map/'$TOWN'/lanelet2_map.osm; export CARLA_SPAWN='"$SPAWN"'; export RVIZ_DISPLAY='"$DISP"'; python3 /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
+for i in $(seq 1 60); do
+  SUDO docker exec autoware bash -lc "ss -tlnp 2>/dev/null | grep -q 8765" 2>/dev/null && { echo "    gateway up (ws:8765)"; break; }
+  sleep 2
+done
 command -v adb >/dev/null && adb reverse tcp:8765 tcp:8765 >/dev/null 2>&1 || true
 # rviz on the host monitor (CARLA is RenderOffScreen, so the GPU display is free)
 DISPLAY=$DISP XAUTHORITY=$XA xhost +local: >/dev/null 2>&1 || true
