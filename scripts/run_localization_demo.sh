@@ -147,17 +147,28 @@ SUDO docker exec autoware bash -lc \
 echo "==> [3/5] Clear stale ROS processes (full container restart)"
 SUDO docker restart autoware >/dev/null 2>&1 || true; sleep 6
 
-echo "==> [4/5] Launch Autoware e2e (localization only, UDP DDS)"
-SUDO docker exec -d autoware bash -lc \
-  "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash && \
-   ros2 launch autoware_launch e2e_simulator.launch.xml \
-   map_path:=/root/autoware_map/$TOWN vehicle_model:=sample_vehicle \
-   sensor_model:=carla_sensor_kit simulator_type:=carla carla_map:=$TOWN \
-   timeout:=300 perception:=false rviz:=false launch_system_monitor:=false \
-   > /tmp/e2e.log 2>&1"
+# A component container occasionally dies DURING startup (rclcpp race under the
+# launch burst); its respawn then deadlocks (behavior waits for scenario,
+# scenario_selector waits for trajectory) and a core spins at 100%. A clean
+# launch never shows "process has died" -- so launch, check, and retry e2e
+# (container restart included) until the bring-up is death-free.
+for e2etry in 1 2 3; do
+  echo "==> [4/5] Launch Autoware e2e (attempt $e2etry)"
+  SUDO docker exec -d autoware bash -lc \
+    "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash && \
+     ros2 launch autoware_launch e2e_simulator.launch.xml \
+     map_path:=/root/autoware_map/$TOWN vehicle_model:=sample_vehicle \
+     sensor_model:=carla_sensor_kit simulator_type:=carla carla_map:=$TOWN \
+     timeout:=300 perception:=false rviz:=false launch_system_monitor:=false \
+     > /tmp/e2e.log 2>&1"
+  sleep 60
+  DIED=$(SUDO docker exec autoware bash -lc "grep -ac 'process has died' /tmp/e2e.log" 2>/dev/null | tr -dc 0-9)
+  [ "${DIED:-0}" = "0" ] && break
+  echo "    a component died during startup ($DIED) -- clean retry"
+  SUDO docker restart autoware >/dev/null 2>&1 || true; sleep 6
+done
 
-echo "==> [5/5] Waiting for localization to converge (~90 s)..."
-sleep 60
+echo "==> [5/5] Waiting for localization to converge..."
 # Seed NDT with the EXACT known spawn pose. On symmetric roads (divided
 # highways) NDT can converge 180-deg flipped -> start-lanelet matching fails
 # and every route comes back empty. Deterministic init kills that flakiness.
