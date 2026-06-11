@@ -13,15 +13,27 @@ CARLA 0.9.16 (cores 0,8) ──lidar/imu/gnss──► Autoware (docker, cores 1
                           Galaxy Tab ◄───────────┘ Tesla dashboard, tap-to-go
 ```
 
-## Quick start (everything in one command)
+## Quick start — `./run.sh` 하나로 전부
 
 ```bash
-bash scripts/run_localization_demo.sh Town04     # ~4 min: CARLA + Autoware + gateway + rviz
+cd ~/autoware-keti
+./run.sh                 # Town04 풀스택 (~4분: CARLA+Autoware+게이트웨이+rviz)
+./run.sh drive           # 자율주행 출발 (태블릿 DRIVE 버튼과 동일)
+./run.sh status          # 전체 프로세스 상태 한눈에
 ```
 
-Then drive — any of:
-- **Tablet** (USB): DRIVE button, or tap a point on the map (tap-to-go)
-- `docker exec autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 /root/drive_monitor.py drive"`
+| 명령 | 동작 |
+|---|---|
+| `./run.sh [TownXX]` | 해당 타운 풀스택 기동 (기본 Town04) |
+| `./run.sh drive` / `stop` | 자율주행 출발 / 정지 |
+| `./run.sh real` | 실제 지도 자율주행 (CARLA 없이, planning simulator) |
+| `./run.sh app` | 태블릿 앱 빌드+설치+USB 연결 |
+| `./run.sh test` | 전 타운 자율주행 검증 (~40분, 결과 docs/town_test_results.md) |
+| `./run.sh status` / `kill` | 프로세스 상태 / 전부 정리 |
+
+**태블릿**: USB 연결 후 앱 실행 — DRIVE 버튼 또는 **지도 탭 = 그 지점으로 자율주행**.
+수동운전: 독의 게임패드 아이콘 → 조이스틱/기울기(TILT) 조향 + ACCEL/REVERSE 페달.
+Wi-Fi는 독의 ⚙에서 `ws://<PC-IP>:8765/ws`.
 
 Verified: route SET → trajectory 150+ pts → AUTONOMOUS → up to ~28 km/h
 lane-following (cap `max_vel: 8.33`). The car is driven end-to-end by Autoware
