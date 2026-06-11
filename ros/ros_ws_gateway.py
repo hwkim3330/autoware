@@ -423,7 +423,7 @@ class Bridge(Node):
             self._res(f"engaging... ({i + 1}/6)")
         self._res(f"route set, engage failed: {ra.status.message if ra else 'no resp'}")
 
-    def _set_route_to(self, gx, gy, gtg):
+    def _set_route_to(self, gx, gy, gtg, timeout=14.0):
         """Set a route to one goal pose; return the service result."""
         req = SetRoutePoints.Request()
         req.header.frame_id = "map"
@@ -433,7 +433,7 @@ class Bridge(Node):
         gp.orientation.z = math.sin(gtg / 2); gp.orientation.w = math.cos(gtg / 2)
         req.goal = gp
         req.option.allow_goal_modification = True
-        return self._call(self.cli_route, req, timeout=14.0)
+        return self._call(self.cli_route, req, timeout=timeout)
 
     def _goto(self, tx, ty):
         """Tesla-style tap-to-go: snap the tapped (x,y) to the nearest lane
@@ -446,19 +446,34 @@ class Bridge(Node):
         # goal-ineligible (intersection interior etc.) all attempts fail. Pick
         # the nearest, then the next ones at least 6 m apart, up to 4 spots.
         ranked = sorted(self.centerlines, key=lambda p: math.hypot(p[0] - tx, p[1] - ty))
-        near = []
-        for p in ranked:
-            if all(math.hypot(p[0] - q[0], p[1] - q[1]) > 6.0 for q in near):
-                near.append(p)
-            if len(near) >= 4:
-                break
-        self._res(f"goto ({tx:.0f},{ty:.0f}) -> snapped {math.hypot(near[0][0]-tx, near[0][1]-ty):.0f}m")
+        gx, gy, gtg = ranked[0]
+        self._res(f"goto ({tx:.0f},{ty:.0f}) -> snapped {math.hypot(gx-tx, gy-ty):.0f}m")
         self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
-        for gx, gy, gtg in near:
-            for g2 in (gtg, gtg + math.pi):   # tangent may be anti-parallel
-                r = self._set_route_to(gx, gy, g2)
-                if (r and r.status.success) or self._route_is_set():
-                    self._engage(gx, gy); return
+        # 1) exact snap, ONE short attempt each orientation (goal-ineligible
+        #    lanelets -- intersection interiors -- make the planner hang)
+        for g2 in (gtg, gtg + math.pi):
+            r = self._set_route_to(gx, gy, g2, timeout=8.0)
+            if (r and r.status.success) or self._route_is_set():
+                self._engage(gx, gy); return
+        # 2) fallback: drive TOWARD the tap -- proven drive-style goals 40-90 m
+        #    from the ego in the tap's bearing; user taps again as they close in.
+        with self.lock:
+            od = self.s.get("odom")
+        if od:
+            o = od[0].pose.pose
+            ex, ey = o.position.x, o.position.y
+            brg = math.atan2(ty - ey, tx - ex)
+            cand = sorted(
+                (math.hypot(x - ex, y - ey), x, y, tg)
+                for x, y, tg in self.centerlines
+                if 40 < math.hypot(x - ex, y - ey) < 90
+                and abs((math.atan2(y - ey, x - ex) - brg + math.pi) % (2 * math.pi) - math.pi) < 1.0)
+            self._res(f"goto: heading toward tap ({len(cand)} cand)")
+            for d, cx2, cy2, ct in cand[len(cand) // 3: len(cand) // 3 + 3] + cand[:3]:
+                for g2 in (ct, ct + math.pi):
+                    r = self._set_route_to(cx2, cy2, g2, timeout=8.0)
+                    if (r and r.status.success) or self._route_is_set():
+                        self._engage(cx2, cy2); return
         time.sleep(2.0)
         if self._route_is_set():
             self._engage(None, None); return
