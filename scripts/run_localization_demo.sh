@@ -63,7 +63,7 @@ SUDO pkill -9 -f CarlaUE4-Linux-Shipping 2>/dev/null; sleep 4
 for attempt in 1 2 3 4 5; do
   cd "$CARLA_DIR"
   setsid taskset -c 0,8 env DISPLAY="$DISP" XAUTHORITY="$XA" \
-    ./CarlaUE4-Linux-Shipping CarlaUE4 -RenderOffScreen -quality-level=Low \
+    ./CarlaUE4-Linux-Shipping "$TOWN" -RenderOffScreen -quality-level=Low \
     -nosound -carla-rpc-port=2000 </dev/null >/tmp/carla.log 2>&1 & disown
   up=0; for i in $(seq 1 25); do sleep 3; ss -tlnp 2>/dev/null | grep -q :2000 && { up=1; break; }; done
   if [ $up -eq 1 ]; then sleep 15; ss -tlnp 2>/dev/null | grep -q :2000 && { echo "    CARLA up (attempt $attempt)"; break; }; fi
