@@ -157,7 +157,19 @@ SUDO docker exec -d autoware bash -lc \
    > /tmp/e2e.log 2>&1"
 
 echo "==> [5/5] Waiting for localization to converge (~90 s)..."
-sleep 90
+sleep 60
+# Seed NDT with the EXACT known spawn pose. On symmetric roads (divided
+# highways) NDT can converge 180-deg flipped -> start-lanelet matching fails
+# and every route comes back empty. Deterministic init kills that flakiness.
+read -r SX SY SZ _ _ SYAW <<< "$(echo "$SPAWN" | tr -d ',')"
+if [ "$SPAWN" != "None" ]; then
+  AWY=$(python3 -c "print(-($SY))"); AWYAW=$(python3 -c "print(-($SYAW))")
+  QZ=$(python3 -c "import math;print(math.sin(math.radians($AWYAW)/2))")
+  QW=$(python3 -c "import math;print(math.cos(math.radians($AWYAW)/2))")
+  SUDO docker exec autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped      '{header: {frame_id: map}, pose: {pose: {position: {x: $SX, y: $AWY, z: 0.0},        orientation: {z: $QZ, w: $QW}},        covariance: [0.25,0,0,0,0,0, 0,0.25,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0.068]}}'"      >/dev/null 2>&1
+  echo "    initialpose seeded: aw=($SX, $AWY, ${AWYAW}deg)"
+fi
+sleep 30
 SUDO docker exec autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
    echo -n 'lidar front       : '; timeout 8 ros2 topic hz /sensing/lidar/front/pointcloud_before_sync 2>/dev/null|grep -m1 average || timeout 8 ros2 topic hz /sensing/lidar/top/pointcloud_before_sync 2>/dev/null|grep -m1 average; \
