@@ -359,3 +359,37 @@ DEFAULT is therefore LIDARS=1 (velodyne_top 300k): repeatedly verified
 autonomous at up to 27.8 km/h. The 4-lidar configs stay in the repo
 (sensor_mapping_roii_4lidar.yaml, pointcloud_preprocessor_4lidar.launch.py,
 xacro/calibration) for when the upstream interface/executor issues are fixed.
+
+## MULTIMODE localization (숭실대 구조) — working
+
+Mode = which localization-source composition feeds the EKF, selected live by
+sensor availability (not a mere failure flag). `ros/multimode_supervisor.py`
+sits between the estimators and the EKF (launch arg `input_pose_with_cov_name`
+remapped to /localization/multimode/pose_with_covariance):
+
+- LIDAR_GNSS (dual): NDT pose forwarded unchanged.
+- GNSS_IMU (fallback): NDT stale (>1.5 s) or fault-injected -> GNSS position +
+  held yaw, inflated covariance. EKF keeps producing kinematic_state.
+
+Verified live: inject "lidar_fail" on /multimode/inject -> mode flips to
+GNSS_IMU, EKF stays at ~20 Hz; "clear" -> back to LIDAR_GNSS. Tablet: settings
+gear -> LiDAR 고장주입 / 복구; mode row turns amber in fallback.
+Extensible to camera-based modes when a visual estimator is added.
+
+## Manual REVERSE — root cause & fix
+
+The Autoware chain can never reverse: raw_vehicle_cmd_converter turns a
+negative-velocity Control into a BRAKE actuation, so CARLA only ever sees
+brake (the carla_ros gear patch alone can't help — the gate keeps fighting
+direct injection too). Manual mode therefore drives the CARLA actor DIRECTLY
+(apply_control at ~30 Hz, outrunning the interface's own ticks).
+CRITICAL: libcarla is NOT thread-safe — calling it from the 100 Hz reentrant
+rclpy timer crashed the gateway with a silent SIGSEGV. All carla client calls
+now live on one dedicated thread, serialized with the respawn path.
+
+## Respawn (wall recovery)
+
+{cmd:respawn}: STOP + clear route first (else autonomy drives the teleported
+car away), teleport ×3 (sync mode can swallow one set_transform), wait for the
+lidar to see the new surroundings, re-seed /initialpose ×3, then poll until
+the EKF converges within 5 m of the spawn.
