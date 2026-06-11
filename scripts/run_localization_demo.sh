@@ -72,13 +72,13 @@ done
 ss -tlnp 2>/dev/null | grep -q :2000 || { echo "CARLA failed to boot"; exit 1; }
 SUDO renice -n -10 -p "$(pgrep -f CarlaUE4-Linux-Shipping | head -1)" >/dev/null 2>&1
 
-echo "==> [2/5] Pin Autoware container to cores 6-15, install configs (LIDARS=${LIDARS:-4})"
+echo "==> [2/5] Pin Autoware container to cores 6-15, install configs (LIDARS=${LIDARS:-1})"
 SUDO docker update --cpuset-cpus="1-7,9-15" autoware >/dev/null 2>&1
 SUDO docker cp "$REPO/config/fastdds_udp.xml" autoware:/tmp/udp.xml >/dev/null 2>&1
 
 # LiDAR suite: default = ROii 4-LiDAR (front/rear G32 directional + side rotating
 # Pandars, concatenated). LIDARS=1 falls back to the single velodyne_top config.
-if [ "${LIDARS:-4}" = "4" ]; then
+if [ "${LIDARS:-1}" = "4" ]; then
   SUDO docker cp "$REPO/config/sensor_mapping_roii_4lidar.yaml" \
     autoware:/opt/autoware/share/autoware_carla_interface/config/sensor_mapping.yaml >/dev/null 2>&1
   SUDO docker cp "$REPO/container_patches/pointcloud_preprocessor_4lidar.launch.py" \

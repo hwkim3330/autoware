@@ -342,3 +342,20 @@ crashes or hangs the CARLA server even when booted directly — deferred.
 Process hygiene: stray CARLA zombies and leftover e2e stacks were the main
 source of "it worked before" flakiness — `scripts/status.sh` shows everything
 at a glance; the bring-up script kills/restarts everything it owns.
+
+## 4-LiDAR (ROii suite) status — sensing verified, planning blocked upstream
+
+`LIDARS=4 ./run.sh Town04` brings up the real ROii suite (front/rear G32 with
+horizontal_fov, side rotating Pandars, 70k pts each) — all four spawn, the
+concatenation runs at 10 Hz (after adding the TF frames in sensor_kit.xacro),
+NDT converges. Two upstream issues block autonomy in this mode:
+1. the python carla interface intermittently dies during the 4-sensor attach
+   burst (same family as the 6-camera segfault; the e2e retry loop catches it);
+2. when everything is up, the behavior_planning container spins a full core and
+   starves its own subscriptions ("waiting for route" with route SET) — an
+   rclcpp executor/sim-time pathology, not config. Plain-link TF frames (no
+   VLP-16 macro baggage) did not change it.
+DEFAULT is therefore LIDARS=1 (velodyne_top 300k): repeatedly verified
+autonomous at up to 27.8 km/h. The 4-lidar configs stay in the repo
+(sensor_mapping_roii_4lidar.yaml, pointcloud_preprocessor_4lidar.launch.py,
+xacro/calibration) for when the upstream interface/executor issues are fixed.
