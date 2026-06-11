@@ -163,6 +163,21 @@ class Bridge(Node):
         self.create_subscription(_Str, "/multimode/mode",
                                  lambda m: self._set("mmode", m), 1)
         self.pub_inject = self.create_publisher(_Str, "/multimode/inject", 1)
+        # vehicle status / safety for the full-Autoware dashboard
+        from autoware_vehicle_msgs.msg import SteeringReport, TurnIndicatorsReport
+        self.create_subscription(SteeringReport, "/vehicle/status/steering_status",
+                                 lambda m: self._set("steer", m), 10)
+        self.create_subscription(TurnIndicatorsReport, "/vehicle/status/turn_indicators_status",
+                                 lambda m: self._set("blink", m), 1)
+        try:
+            from autoware_adapi_v1_msgs.msg import MrmState
+            self.create_subscription(MrmState, "/api/fail_safe/mrm_state",
+                                     lambda m: self._set("mrm", m), 1)
+        except Exception:
+            pass
+        from autoware_vehicle_msgs.msg import TurnIndicatorsCommand
+        self.create_subscription(TurnIndicatorsCommand, "/control/command/turn_indicators_cmd",
+                                 lambda m: self._set("blinkcmd", m), 1)
         be = QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST)
         from sensor_msgs.msg import PointCloud2
         self.create_subscription(PointCloud2, "/localization/util/downsample/pointcloud",
@@ -543,6 +558,21 @@ class Bridge(Node):
         op_avail = bool(s["op"][0].is_autonomous_mode_available) if "op" in s else False
         rstate = s["route"][0].state if "route" in s else 0
         ntraj = len(s["traj"][0].points) if "traj" in s and fresh("traj", 5) else 0
+        steer_deg = (round(math.degrees(s["steer"][0].steering_tire_angle), 1)
+                     if fresh("steer") else 0.0)
+        blink = 0
+        if fresh("blinkcmd", 3):
+            blink = int(s["blinkcmd"][0].command)   # 1 disable, 2 left, 3 right
+        elif fresh("blink", 3):
+            blink = int(s["blink"][0].report)
+        mrm = ""
+        if "mrm" in s:
+            mm = s["mrm"][0]
+            if getattr(mm, "state", 0) not in (0, 1):   # not NORMAL
+                mrm = {2: "MRM_OPERATING", 3: "MRM_SUCCEEDED", 4: "MRM_FAILED"}.get(mm.state, "MRM")
+        planned_kmh = 0.0
+        if "traj" in s and fresh("traj", 5) and s["traj"][0].points:
+            planned_kmh = round(s["traj"][0].points[0].longitudinal_velocity_mps * 3.6, 1)
         # planned-path overlay for the tablet map (downsampled to ~120 pts)
         traj_path = []
         if "traj" in s and fresh("traj", 5):
@@ -579,6 +609,8 @@ class Bridge(Node):
             "operationMode": {"mode": OP_MODE.get(op, "UNKNOWN"), "raw": op, "autonomousAvailable": op_avail},
             "route": {"state": ROUTE_STATE.get(rstate, "UNKNOWN"), "raw": rstate,
                       "trajPoints": ntraj, "trajPath": traj_path},
+            "vehicle": {"steerDeg": steer_deg, "turn": blink, "mrm": mrm,
+                        "plannedKmh": planned_kmh},
             "sensors": sensors, "parts": parts, "faults": faults,
             "sensorSuite": {"lidars": len(ROII_LIDARS), "radars": len(ROII_RADARS),
                             "simulated": 4, "cameras": 0},
