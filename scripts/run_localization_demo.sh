@@ -25,7 +25,9 @@ set -u
 TOWN="${1:-Town04}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 CARLA_DIR=/opt/carla-simulator/CarlaUE4/Binaries/Linux
-SUDO() { echo 1 | sudo -S "$@"; }
+# host-side hard timeout on every sudo/docker call -- a wedged `docker exec`
+# (DDS discovery hang inside the container) froze a bring-up for 3+ hours once.
+SUDO() { timeout 180 sudo -S "$@" < <(echo 1); }
 
 # Aligned on-lane spawn per town (CARLA coords, facing lane direction), computed
 # by ros/find_spawn.py from each town's lanelet2 osm. A RANDOM/off-direction
