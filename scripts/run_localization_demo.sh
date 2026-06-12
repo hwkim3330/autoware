@@ -128,12 +128,19 @@ SUDO docker cp "$REPO/container_patches/carla_ros.py" \
 SUDO docker exec autoware bash -lc \
   'for d in /root/autoware_map/Town*/; do echo "projector_type: local" > "$d/map_projector_info.yaml"; done' >/dev/null 2>&1
 
-# MULTIMODE localization (숭실대): the EKF consumes the supervisor's output
-# instead of NDT directly, so the supervisor can switch the localization source
-# by sensor availability (LIDAR_GNSS dual <-> GNSS_IMU fallback).
-SUDO docker exec autoware bash -lc \
-  "sed -i 's|value=\"/localization/pose_estimator/pose_with_covariance\"|value=\"/localization/multimode/pose_with_covariance\"|' \
-   /opt/autoware/share/tier4_localization_launch/launch/pose_twist_fusion_filter/pose_twist_fusion_filter.launch.xml" >/dev/null 2>&1
+# MULTIMODE localization (숭실대, opt-in: MULTIMODE=1): EKF consumes the
+# supervisor's output so the source can switch by sensor availability.
+# DEFAULT (=0) keeps the proven direct NDT->EKF wiring -- with the remap, the
+# e2e boots with NO EKF input until the supervisor starts, which destabilized
+# the launch (poisoned-stack epidemic).
+PTF=/opt/autoware/share/tier4_localization_launch/launch/pose_twist_fusion_filter/pose_twist_fusion_filter.launch.xml
+if [ "${MULTIMODE:-0}" = "1" ]; then
+  SUDO docker exec autoware bash -lc \
+    "sed -i 's|value=\"/localization/pose_estimator/pose_with_covariance\"|value=\"/localization/multimode/pose_with_covariance\"|' $PTF" >/dev/null 2>&1
+else
+  SUDO docker exec autoware bash -lc \
+    "sed -i 's|value=\"/localization/multimode/pose_with_covariance\"|value=\"/localization/pose_estimator/pose_with_covariance\"|' $PTF" >/dev/null 2>&1
+fi
 
 # Cruise speed: planner global cap (default 4.17 m/s = 15 km/h). 8.33 = 30 km/h;
 # actual speed = min(this, lanelet speed_limit, curve/decel constraints).
@@ -242,7 +249,7 @@ sleep 1
 SUDO docker exec -d autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
   python3 /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1 &
-   python3 /root/multimode_supervisor.py --ros-args -p use_sim_time:=true > /tmp/multimode.log 2>&1 &
+   [ "${MULTIMODE:-0}" = "1" ] && python3 /root/multimode_supervisor.py --ros-args -p use_sim_time:=true > /tmp/multimode.log 2>&1 &
    export LANELET_OSM=/root/autoware_map/'$TOWN'/lanelet2_map.osm; export CARLA_SPAWN='"$SPAWN"'; export RVIZ_DISPLAY='"$DISP"'; python3 /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
 for i in $(seq 1 60); do
   SUDO docker exec autoware bash -lc "ss -tlnp 2>/dev/null | grep -q 8765" 2>/dev/null && { echo "    gateway up (ws:8765)"; break; }
