@@ -220,6 +220,12 @@ for e2etry in 1 2 3; do
     continue
   fi
   seed_initialpose
+  # behavior_path needs the perception stub (empty objects + clear occupancy
+  # grid) to produce ANY trajectory -- it must run BEFORE the smoke test.
+  # (Starting it only after the gate made the gate fail unconditionally.)
+  SUDO docker exec autoware bash -c 'pkill -9 -f perception_stub.py; exit 0' >/dev/null 2>&1
+  SUDO docker cp "$REPO/ros/perception_stub.py" autoware:/root/perception_stub.py >/dev/null 2>&1
+  SUDO docker exec -d autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1"
   sleep 30
   # THE acceptance gate: can the stack actually produce a trajectory? Component
   # deaths can strike at any time (even on route arrival) and leave a deadlocked
@@ -254,8 +260,7 @@ SUDO docker exec autoware bash -c 'pkill -9 -f perception_stub.py; pkill -9 -f m
 sleep 1
 SUDO docker exec -d autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
-  python3 /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1 &
-   [ "${MULTIMODE:-0}" = "1" ] && python3 /root/multimode_supervisor.py --ros-args -p use_sim_time:=true > /tmp/multimode.log 2>&1 &
+  [ "${MULTIMODE:-0}" = "1" ] && python3 /root/multimode_supervisor.py --ros-args -p use_sim_time:=true > /tmp/multimode.log 2>&1 &
    export LANELET_OSM=/root/autoware_map/'$TOWN'/lanelet2_map.osm; export CARLA_SPAWN='"$SPAWN"'; export RVIZ_DISPLAY='"$DISP"'; python3 /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
 for i in $(seq 1 60); do
   SUDO docker exec autoware bash -lc "ss -tlnp 2>/dev/null | grep -q 8765" 2>/dev/null && { echo "    gateway up (ws:8765)"; break; }
