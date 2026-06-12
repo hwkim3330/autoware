@@ -163,6 +163,10 @@ class Bridge(Node):
         self.create_subscription(_Str, "/multimode/mode",
                                  lambda m: self._set("mmode", m), 1)
         self.pub_inject = self.create_publisher(_Str, "/multimode/inject", 1)
+        # ROii 4-LiDAR experimental layer
+        self.create_subscription(_Str, "/roii/lidar_health",
+                                 lambda m: self._set("roii_health", m), 1)
+        self.pub_roii_fault = self.create_publisher(_Str, "/roii/fault_injector/command", 10)
         # vehicle status / safety for the full-Autoware dashboard
         from autoware_vehicle_msgs.msg import SteeringReport, TurnIndicatorsReport
         self.create_subscription(SteeringReport, "/vehicle/status/steering_status",
@@ -338,6 +342,14 @@ class Bridge(Node):
                 from std_msgs.msg import String as _Str
                 self.pub_inject.publish(_Str(data="lidar_fail"))
                 self._res("FAULT INJECTED: lidar -> multimode fallback")
+            elif isinstance(cmd, tuple) and cmd[0] == "roii_fault":
+                from std_msgs.msg import String as _Str
+                self.pub_roii_fault.publish(_Str(data=cmd[1]))
+                self._res(f"roii fault cmd: {cmd[1][:60]}")
+            elif cmd == "trigger_emergency":
+                # Phase B: placeholder -- wire the actual fail-safe target in
+                # Phase C (configurable topic/service).
+                self._res("trigger_emergency: not wired (Phase C)")
             elif cmd == "heal":
                 from std_msgs.msg import String as _Str
                 self.pub_inject.publish(_Str(data="clear"))
@@ -637,6 +649,8 @@ class Bridge(Node):
                       "trajPoints": ntraj, "trajPath": traj_path},
             "vehicle": {"steerDeg": steer_deg, "turn": blink, "mrm": mrm,
                         "plannedKmh": planned_kmh},
+            "roii": (json.loads(s["roii_health"][0].data)
+                     if "roii_health" in s and fresh("roii_health", 3) else None),
             "sensors": sensors, "parts": parts, "faults": faults,
             "sensorSuite": {"lidars": len(ROII_LIDARS), "radars": len(ROII_RADARS),
                             "simulated": 4, "cameras": 0},
@@ -673,6 +687,13 @@ async def handler(ws):
                 elif cmd == "goto":
                     BRIDGE.enqueue(("goto", data.get("x"), data.get("y")))
                     print(f"[cmd] goto {data.get('x')},{data.get('y')}")
+                elif cmd == "fault":
+                    import json as _json
+                    payload = {k: v for k, v in data.items() if k != "cmd"}
+                    BRIDGE.enqueue(("roii_fault", _json.dumps(payload)))
+                    print(f"[cmd] roii fault {payload}")
+                elif cmd == "trigger_emergency":
+                    BRIDGE.enqueue("trigger_emergency")
                 elif cmd == "vehicle":
                     BRIDGE.enqueue(("vehicle", data.get("model", "roii")))
                     print(f"[cmd] vehicle {data.get('model')}")
