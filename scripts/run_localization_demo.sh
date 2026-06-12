@@ -5,7 +5,7 @@
 # the sensing -> NDT -> localization pipeline converge without CARLA crashing.
 #
 # The four fixes that made it work (see docs/autoware_carla_integration.md):
-#   1. CPU partition   - CARLA pinned to cores 0-5, Autoware container to 6-15,
+#   1. CPU partition   - CARLA pinned to cores 0,8 (HT pair), container 1-7,9-15,
 #                        so the Autoware start-up burst (load ~40) cannot starve
 #                        CARLA's RPC server.
 #   2. UDP-only DDS     - config/fastdds_udp.xml disables SHM transport; kills the
@@ -84,7 +84,7 @@ boot_carla() {
   return 1
 }
 
-echo "==> [1/5] Boot CARLA on cores 0-5 (retry until RPC stays up)"
+echo "==> [1/5] Boot CARLA on cores 0,8 (one HT pair; retry until RPC stays up)"
 boot_carla || { echo "CARLA failed to boot"; exit 1; }
 SUDO renice -n -10 -p "$(pgrep -f CarlaUE4-Linux-Shipping | head -1)" >/dev/null 2>&1
 
@@ -110,6 +110,12 @@ else
     autoware:/opt/autoware/share/autoware_carla_interface/config/sensor_mapping.yaml >/dev/null 2>&1
   SUDO docker cp "$REPO/container_patches/pointcloud_preprocessor_1lidar.launch.py" \
     autoware:/opt/autoware/share/carla_sensor_kit_launch/launch/pointcloud_preprocessor.launch.py >/dev/null 2>&1
+  # restore STOCK kit description (4-lidar xacro/calibration linger in the
+  # container from LIDARS=4 runs otherwise)
+  SUDO docker cp "$REPO/container_patches/sensor_kit_stock.xacro" \
+    autoware:/opt/autoware/share/carla_sensor_kit_description/urdf/sensor_kit.xacro >/dev/null 2>&1
+  SUDO docker cp "$REPO/container_patches/sensor_kit_calibration_stock.yaml" \
+    autoware:/opt/autoware/share/carla_sensor_kit_description/config/sensor_kit_calibration.yaml >/dev/null 2>&1
 fi
 
 # Camera-off interface launch (camera relay/republish/combiner nodes stripped ->
