@@ -94,7 +94,20 @@ SUDO docker cp "$REPO/config/fastdds_udp.xml" autoware:/tmp/udp.xml >/dev/null 2
 
 # LiDAR suite: default = ROii 4-LiDAR (front/rear G32 directional + side rotating
 # Pandars, concatenated). LIDARS=1 falls back to the single velodyne_top config.
-if [ "${LIDARS:-1}" = "4" ]; then
+if [ -n "${ROII_PROFILE:-}" ]; then
+  # ===== ROii 4-LiDAR experimental mode (low|mid|high) =====
+  echo "    ROii profile: ${ROII_PROFILE}"
+  SUDO docker cp "$REPO/config/sensor_mapping_roii_lidar_${ROII_PROFILE}.yaml" \
+    autoware:/opt/autoware/share/autoware_carla_interface/config/sensor_mapping.yaml >/dev/null 2>&1
+  SUDO docker cp "$REPO/container_patches/pointcloud_preprocessor_roii.launch.py" \
+    autoware:/opt/autoware/share/carla_sensor_kit_launch/launch/pointcloud_preprocessor.launch.py >/dev/null 2>&1
+  SUDO docker cp "$REPO/container_patches/sensor_kit_calibration_roii.yaml" \
+    autoware:/opt/autoware/share/carla_sensor_kit_description/config/sensor_kit_calibration.yaml >/dev/null 2>&1
+  SUDO docker cp "$REPO/container_patches/sensor_kit_roii.xacro" \
+    autoware:/opt/autoware/share/carla_sensor_kit_description/urdf/sensor_kit.xacro >/dev/null 2>&1
+  SUDO docker cp "$REPO/container_patches/carla_wrapper.py" \
+    autoware:/opt/autoware/lib/python3.10/site-packages/autoware_carla_interface/modules/carla_wrapper.py >/dev/null 2>&1
+elif [ "${LIDARS:-1}" = "4" ]; then
   SUDO docker cp "$REPO/config/sensor_mapping_roii_4lidar.yaml" \
     autoware:/opt/autoware/share/autoware_carla_interface/config/sensor_mapping.yaml >/dev/null 2>&1
   SUDO docker cp "$REPO/container_patches/pointcloud_preprocessor_4lidar.launch.py" \
