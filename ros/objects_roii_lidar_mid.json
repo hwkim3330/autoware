@@ -1,0 +1,78 @@
+{
+  "profile": "mid",
+  "note": "mount positions are placeholders (not CAD)",
+  "vehicle": {
+    "name": "ROii",
+    "length": 4.9,
+    "width": 2.095,
+    "height": 2.66,
+    "wheel_base": 3.3,
+    "max_speed_kmh": 40
+  },
+  "sensors": [
+    {
+      "name": "front_g32",
+      "type": "sensor.lidar.ray_cast",
+      "frame": "roii_front_g32",
+      "topic": "/sensing/lidar/front_g32/pointcloud_before_sync",
+      "x": 2.15,
+      "y": 0.0,
+      "z": 1.1,
+      "yaw_deg": 0,
+      "channels": 32,
+      "range": 175,
+      "points_per_second": 160000,
+      "horizontal_fov": 135.0
+    },
+    {
+      "name": "rear_g32",
+      "type": "sensor.lidar.ray_cast",
+      "frame": "roii_rear_g32",
+      "topic": "/sensing/lidar/rear_g32/pointcloud_before_sync",
+      "x": -2.15,
+      "y": 0.0,
+      "z": 1.1,
+      "yaw_deg": 180,
+      "channels": 32,
+      "range": 175,
+      "points_per_second": 160000,
+      "horizontal_fov": 135.0
+    },
+    {
+      "name": "left_pandar",
+      "type": "sensor.lidar.ray_cast",
+      "frame": "roii_left_pandar",
+      "topic": "/sensing/lidar/left_pandar/pointcloud_before_sync",
+      "x": 1.6,
+      "y": 1.05,
+      "z": 1.35,
+      "yaw_deg": 90,
+      "channels": 40,
+      "range": 135,
+      "points_per_second": 200000,
+      "horizontal_fov": 360.0
+    },
+    {
+      "name": "right_pandar",
+      "type": "sensor.lidar.ray_cast",
+      "frame": "roii_right_pandar",
+      "topic": "/sensing/lidar/right_pandar/pointcloud_before_sync",
+      "x": 1.6,
+      "y": -1.05,
+      "z": 1.35,
+      "yaw_deg": -90,
+      "channels": 40,
+      "range": 135,
+      "points_per_second": 200000,
+      "horizontal_fov": 360.0
+    },
+    {
+      "name": "imu",
+      "type": "sensor.other.imu"
+    },
+    {
+      "name": "gnss",
+      "type": "sensor.other.gnss"
+    }
+  ]
+}

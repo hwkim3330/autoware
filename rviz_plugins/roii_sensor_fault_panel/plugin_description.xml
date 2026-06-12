@@ -1,0 +1,7 @@
+<library path="roii_sensor_fault_panel">
+  <class name="roii_sensor_fault_panel/ROiiSensorFaultPanel"
+         type="roii_sensor_fault_panel::ROiiSensorFaultPanel"
+         base_class_type="rviz_common::Panel">
+    <description>ROii 4-LiDAR health status and fault injection panel</description>
+  </class>
+</library>

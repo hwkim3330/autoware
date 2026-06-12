@@ -1,0 +1,57 @@
+# ROii vehicle LiDAR specification (modelling reference for CARLA).
+# NOTE: mounting positions are PLACEHOLDERS (not measured CAD values).
+vehicle:
+  name: ROii
+  length: 4.900      # m
+  width: 2.095
+  height: 2.660
+  wheel_base: 3.300
+  max_speed_kmh: 40
+
+lidars:
+  front_g32:               # AutoL G32-class, forward long-range
+    model: AutoL G32 (approx.)
+    channels: 32
+    range_m: 300
+    horizontal_fov_deg: 135
+    vertical_fov_deg: [-5, 5]
+    frame: roii_front_g32
+    # placeholder mount (base_link, x fwd / y left / z up)
+    mount: {x: 2.15, y: 0.0, z: 1.10, yaw_deg: 0}
+  rear_g32:
+    model: AutoL G32 (approx.)
+    channels: 32
+    range_m: 300
+    horizontal_fov_deg: 135
+    vertical_fov_deg: [-5, 5]
+    frame: roii_rear_g32
+    mount: {x: -2.15, y: 0.0, z: 1.10, yaw_deg: 180}
+  left_pandar:              # Hesai Pandar/Pandar40P-class, 360 deg
+    model: Hesai Pandar40P (approx.)
+    channels: 40
+    range_m: 200
+    horizontal_fov_deg: 360
+    vertical_fov_deg: [-25, 15]
+    frame: roii_left_pandar
+    mount: {x: 1.60, y: 1.05, z: 1.35, yaw_deg: 90}
+  right_pandar:
+    model: Hesai Pandar40P (approx.)
+    channels: 40
+    range_m: 200
+    horizontal_fov_deg: 360
+    vertical_fov_deg: [-25, 15]
+    frame: roii_right_pandar
+    mount: {x: 1.60, y: -1.05, z: 1.35, yaw_deg: -90}
+
+profiles:                  # CARLA points_per_second / range per profile
+  low:   {g32_pps: 100000, g32_range: 135, pandar_pps: 140000, pandar_range: 110,
+          purpose: "실행 안정성, 토픽/TF/concatenate 검증"}
+  mid:   {g32_pps: 160000, g32_range: 175, pandar_pps: 200000, pandar_range: 135,
+          purpose: "기본 개발 및 주행 테스트"}
+  high:  {g32_pps: 300000, g32_range: 300, pandar_pps: 500000, pandar_range: 200,
+          purpose: "ROii 센서 커버리지 근사 (CPU 부하 큼)"}
+
+topics:
+  raw_suffix: /pointcloud_raw            # interface output (pre-injector)
+  injected_suffix: /pointcloud_before_sync  # fault-injector output -> concat
+  concatenated: /sensing/lidar/concatenated/pointcloud

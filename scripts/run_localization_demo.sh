@@ -232,6 +232,15 @@ for e2etry in 1 2 3; do
   SUDO docker exec autoware bash -c 'pkill -9 -f perception_stub.py; exit 0' >/dev/null 2>&1
   SUDO docker cp "$REPO/ros/perception_stub.py" autoware:/root/perception_stub.py >/dev/null 2>&1
   SUDO docker exec -d autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1"
+  if [ -n "${ROII_PROFILE:-}" ]; then
+    # the fault injector FEEDS the concatenation (raw -> before_sync); the
+    # health monitor watches the post-injector stream. Both precede the smoke.
+    SUDO docker exec autoware bash -c 'pkill -9 -f roii_lidar_fault_injector.py; pkill -9 -f roii_lidar_health_monitor.py; exit 0' >/dev/null 2>&1
+    SUDO docker cp "$REPO/ros/roii_lidar_fault_injector.py" autoware:/root/roii_lidar_fault_injector.py >/dev/null 2>&1
+    SUDO docker cp "$REPO/ros/roii_lidar_health_monitor.py" autoware:/root/roii_lidar_health_monitor.py >/dev/null 2>&1
+    SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_fault_injector.py --ros-args -p use_sim_time:=true > /tmp/roii_injector.log 2>&1"
+    SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_health_monitor.py --ros-args -p use_sim_time:=true > /tmp/roii_monitor.log 2>&1"
+  fi
   sleep 30
   # THE acceptance gate: can the stack actually produce a trajectory? Component
   # deaths can strike at any time (even on route arrival) and leave a deadlocked
@@ -275,10 +284,15 @@ done
 command -v adb >/dev/null && adb reverse tcp:8765 tcp:8765 >/dev/null 2>&1 || true
 # rviz on the host monitor (CARLA is RenderOffScreen, so the GPU display is free)
 DISPLAY=$DISP XAUTHORITY=$XA xhost +local: >/dev/null 2>&1 || true
-SUDO docker exec -d autoware bash -lc \
+if [ -n "${ROII_PROFILE:-}" ]; then
+  SUDO docker cp "$REPO/rviz/roii_lidar_fault.rviz" autoware:/root/roii_lidar_fault.rviz >/dev/null 2>&1
+  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export DISPLAY=$DISP; export XAUTHORITY=/root/.Xauthority; source /opt/autoware/setup.bash; source /opt/roii_ws/install/setup.bash 2>/dev/null; rviz2 -d /root/roii_lidar_fault.rviz > /tmp/rviz.log 2>&1"
+else
+  SUDO docker exec -d autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export DISPLAY=$DISP; export XAUTHORITY=/root/.Xauthority; \
    source /opt/autoware/setup.bash; \
    rviz2 -d /root/autoware_no_camera.rviz > /tmp/rviz.log 2>&1"
+fi
 echo "Done. Gateway: ws://<host>:8765/ws (adb reverse for USB). rviz on the monitor."
 echo "CARLA log: /tmp/carla.log   Autoware log: docker exec autoware tail -f /tmp/e2e.log"
 exit 0

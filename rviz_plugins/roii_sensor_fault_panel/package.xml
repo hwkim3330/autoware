@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>roii_sensor_fault_panel</name>
+  <version>0.1.0</version>
+  <description>RViz panel: ROii 4-LiDAR health display + fault injection commands</description>
+  <maintainer email="hwkim3@keti.re.kr">KETI</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>rviz_common</depend>
+  <depend>std_msgs</depend>
+  <depend>pluginlib</depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+    <rviz plugin="${prefix}/plugin_description.xml"/>
+  </export>
+</package>

@@ -34,6 +34,7 @@ case "${1:-Town04}" in
     echo "정리 완료 (CARLA 종료, 컨테이너 재시작)"
     ;;
   multimode) shift; MULTIMODE=1 exec bash "$REPO/scripts/run_localization_demo.sh" "${1:-Town04}" ;;
+  roii)    shift; exec bash "$REPO/scripts/run_roii_lidar_${1:-low}.sh" "${2:-Town04}" ;;
   Town*)   exec bash "$REPO/scripts/run_localization_demo.sh" "$1" ;;
   *)       grep -E "^#   ./run.sh" "$0" | sed 's/^# *//'; exit 1 ;;
 esac
