@@ -212,8 +212,11 @@ for e2etry in 1 2 3; do
   sleep 60
   DIED=$(SUDO docker exec autoware bash -lc "grep -ac 'process has died' /tmp/e2e.log" 2>/dev/null | tr -dc 0-9)
   if [ "${DIED:-0}" != "0" ]; then
-    echo "    a component died during startup ($DIED) -- clean retry"
-    SUDO docker restart autoware >/dev/null 2>&1 || true; sleep 6
+    echo "    a component died during startup ($DIED) -- clean retry (SIGINT e2e)"
+    SUDO docker exec autoware bash -c "pkill -INT -f e2e_simulator || true" >/dev/null 2>&1
+    sleep 20
+    SUDO docker exec autoware bash -c "pkill -9 -f component_container; pkill -9 -f autoware; exit 0" >/dev/null 2>&1
+    sleep 5
     continue
   fi
   seed_initialpose
@@ -226,8 +229,11 @@ for e2etry in 1 2 3; do
   SMOKE=$(SUDO docker exec autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      timeout 150 python3 /root/traj_smoke.py /root/autoware_map/$TOWN/lanelet2_map.osm 2>/dev/null" | tail -1)
   echo "    $SMOKE"
   case "$SMOKE" in *"SMOKE: OK"*) break ;; esac
-  echo "    trajectory smoke test FAILED -- clean retry"
-  SUDO docker restart autoware >/dev/null 2>&1 || true; sleep 6
+  echo "    trajectory smoke test FAILED -- clean retry (SIGINT e2e)"
+  SUDO docker exec autoware bash -c "pkill -INT -f e2e_simulator || true" >/dev/null 2>&1
+  sleep 20
+  SUDO docker exec autoware bash -c "pkill -9 -f component_container; pkill -9 -f autoware; exit 0" >/dev/null 2>&1
+  sleep 5
 done
 
 echo "==> [5/5] Waiting for localization to converge..."
