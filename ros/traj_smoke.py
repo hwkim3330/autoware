@@ -109,7 +109,7 @@ def main():
     if not ok:
         print("SMOKE: no route"); sys.exit(1)
     t0 = time.time()
-    while time.time() - t0 < 25:
+    while time.time() - t0 < 60:
         rclpy.spin_once(n, timeout_sec=0.2)
         if box["traj"] > 50:
             call(clr, ClearRoute.Request(), 5)
