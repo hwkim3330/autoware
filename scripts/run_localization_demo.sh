@@ -136,6 +136,14 @@ fi
 SUDO docker cp "$REPO/container_patches/autoware_carla_interface.launch.xml" \
   autoware:/opt/autoware/share/autoware_carla_interface/autoware_carla_interface.launch.xml >/dev/null 2>&1
 
+# Re-routing crash fix: run behavior_planning as a SINGLE-threaded container.
+# The stock component_container_mt races on the wait-set guard condition when
+# behavior resets its modules on a new route ("failed to add guard condition")
+# -> the container dies, re-route impossible. Single-threaded executor removes
+# the cross-thread teardown race.
+SUDO docker cp "$REPO/container_patches/behavior_planning.launch.xml" \
+  autoware:/opt/autoware/share/tier4_planning_launch/launch/scenario_planning/lane_driving/behavior_planning/behavior_planning.launch.xml >/dev/null 2>&1
+
 # Reverse-gear patch (stock interface hardcodes DRIVE; tablet REVERSE needs it).
 SUDO docker cp "$REPO/container_patches/carla_ros.py" \
   autoware:/opt/autoware/lib/python3.10/site-packages/autoware_carla_interface/carla_ros.py >/dev/null 2>&1
