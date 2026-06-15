@@ -182,7 +182,7 @@ SUDO docker exec autoware bash -lc \
    /opt/autoware/share/autoware_carla_interface/autoware_carla_interface.launch.xml" >/dev/null 2>&1
 
 # Refresh the gateway + perception stub + helper scripts in the container.
-for f in ros_ws_gateway.py perception_stub.py multimode_supervisor.py traj_smoke.py find_spawn.py diag_route.py diag_connectivity.py; do
+for f in ros_ws_gateway.py perception_stub.py roii_watchdog.py multimode_supervisor.py traj_smoke.py find_spawn.py diag_route.py diag_connectivity.py; do
   [ -f "$REPO/ros/$f" ] && SUDO docker cp "$REPO/ros/$f" autoware:/root/$f >/dev/null 2>&1
 done
 SUDO docker cp "$REPO/container_patches/roii_clean.rviz" autoware:/root/roii_clean.rviz >/dev/null 2>&1
@@ -307,6 +307,11 @@ fi
 # gateway in its OWN docker exec -d (not chained with &, which left it unbound)
 SUDO docker exec -d autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export LANELET_OSM=/root/autoware_map/$TOWN/lanelet2_map.osm; export CARLA_SPAWN='$SPAWN'; export RVIZ_DISPLAY=$DISP; source /opt/autoware/setup.bash; python3 -u /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
+# watchdog: auto-heals perception_stub + gateway so the demo never sits in a
+# silent "up but won't drive / won't connect" state.
+SUDO docker exec autoware bash -c 'pkill -9 -f roii_watchdog.py; exit 0' >/dev/null 2>&1
+SUDO docker exec -d autoware bash -lc \
+  "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export LANELET_OSM=/root/autoware_map/$TOWN/lanelet2_map.osm; export CARLA_SPAWN='$SPAWN'; export RVIZ_DISPLAY=$DISP; source /opt/autoware/setup.bash; python3 -u /root/roii_watchdog.py --ros-args -p use_sim_time:=true > /tmp/watchdog.log 2>&1"
 for i in $(seq 1 60); do
   SUDO docker exec autoware bash -lc "ss -tlnp 2>/dev/null | grep -q 8765" 2>/dev/null && { echo "    gateway up (ws:8765)"; break; }
   sleep 2
