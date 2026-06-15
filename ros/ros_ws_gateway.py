@@ -501,8 +501,25 @@ class Bridge(Node):
                 near.append((x, y, tg))
             if len(near) >= 8:
                 break
+        # Order goal-orientations so the AHEAD-of-ego direction is tried first.
+        # A goal behind the ego (or its lane tangent pointing back) makes the
+        # planner emit a REVERSE trajectory; lane-driving won't reverse on roads
+        # so the car just sits. Prefer the orientation whose heading points
+        # roughly the same way as ego->goal travel.
+        with self.lock:
+            od0 = self.s.get("odom")
+        eyaw0 = None
+        if od0:
+            q0 = od0[0].pose.pose.orientation
+            eyaw0 = math.atan2(2 * (q0.w * q0.z + q0.x * q0.y),
+                               1 - 2 * (q0.y * q0.y + q0.z * q0.z))
         for cx2, cy2, ct in near:
-            for g2 in (ct, ct + math.pi):
+            orients = (ct, ct + math.pi)
+            if eyaw0 is not None:
+                # goal heading closest to ego heading first (forward-consistent)
+                orients = sorted(orients,
+                    key=lambda a: abs((a - eyaw0 + math.pi) % (2 * math.pi) - math.pi))
+            for g2 in orients:
                 r = self._set_route_to(cx2, cy2, g2, timeout=6.0)
                 if (r and r.status.success) or self._route_is_set():
                     self._engage(cx2, cy2); return
