@@ -402,7 +402,7 @@ class Bridge(Node):
         # prefer a few farther goals first (a meaningful drive), then nearer ones
         order = cand[len(cand) // 3: len(cand) // 3 + 4] + cand[:4]
         self._res(f"finding route ({len(cand)} cand)")
-        self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
+        self._prep_reroute()
         for d, gx, gy, gtg in order[:5]:
             # try the stored tangent AND its 180-deg flip: converted maps may
             # store boundary roles swapped, so the tangent can be anti-parallel
@@ -421,6 +421,32 @@ class Bridge(Node):
         with self.lock:
             r = self.s.get("route")
         return bool(r and r[0].state == 2)  # RouteState.SET
+
+    def _prep_reroute(self):
+        """Re-routing while AUTONOMOUS crashes behavior_planning (it resets its
+        modules while the trajectory follower is mid-use -> rclcpp guard race).
+        Quiesce first: STOP -> wait for the ego to actually halt -> clear. Only
+        does the heavy quiesce when a route is already active."""
+        with self.lock:
+            op = self.s.get("op")
+            already = bool(self.s.get("route") and self.s["route"][0].state in (2, 4))
+        if already or (op and op[0].mode == 2):   # SET/CHANGING or AUTONOMOUS
+            self._res("re-route: stopping first")
+            try:
+                self._call(self.cli_stop, ChangeOperationMode.Request(), timeout=6.0)
+            except Exception:
+                pass
+            # wait for the ego to come to rest so the follower releases the path
+            for _ in range(20):
+                time.sleep(0.3)
+                with self.lock:
+                    od = self.s.get("odom")
+                if od:
+                    v = od[0].twist.twist.linear
+                    if math.hypot(v.x, v.y) < 0.2:
+                        break
+            time.sleep(0.5)
+        self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
 
     def _engage(self, gx, gy):
         tag = f" ({gx:.0f},{gy:.0f})" if gx is not None else ""
@@ -460,7 +486,7 @@ class Bridge(Node):
         ranked = sorted(self.centerlines, key=lambda p: math.hypot(p[0] - tx, p[1] - ty))
         gx, gy, gtg = ranked[0]
         self._res(f"goto ({tx:.0f},{ty:.0f}) -> snapped {math.hypot(gx-tx, gy-ty):.0f}m")
-        self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
+        self._prep_reroute()
         # 1) exact snap, ONE short attempt each orientation (goal-ineligible
         #    lanelets -- intersection interiors -- make the planner hang)
         for g2 in (gtg, gtg + math.pi):
