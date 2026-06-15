@@ -385,6 +385,8 @@ class Bridge(Node):
                 self._res("fault cleared -> auto mode selection")
             elif isinstance(cmd, tuple) and cmd[0] == "vehicle":
                 self._vehicle(cmd[1])
+            elif isinstance(cmd, tuple) and cmd[0] == "maxvel":
+                self._set_maxvel(cmd[1])
         except Exception as e:
             self._res(f"error: {e}")
 
@@ -636,6 +638,40 @@ class Bridge(Node):
                     self._res("respawn OK -- at spawn, ready"); return
         self._res("respawn: teleported but localization not converged (try again)")
 
+    def _set_maxvel(self, kmh):
+        """Runtime cruise-speed change (no re-launch): set max_vel on the nodes
+        that read it. Tablet speed slider -> here."""
+        import subprocess
+        ms = round(float(kmh) / 3.6, 2)
+        targets = [
+            ("/planning/scenario_planning/motion_velocity_smoother", "max_vel"),
+            ("/planning/scenario_planning/scenario_selector", "max_vel"),
+        ]
+        done = 0
+        for node, param in targets:
+            try:
+                r = subprocess.run(["ros2", "param", "set", node, param, str(ms)],
+                                   capture_output=True, text=True, timeout=6)
+                if "Set parameter successful" in (r.stdout + r.stderr):
+                    done += 1
+            except Exception:
+                pass
+        # external velocity limit topic (takes effect immediately on the smoother)
+        try:
+            from autoware_internal_planning_msgs.msg import VelocityLimit
+            if not hasattr(self, "pub_vlim"):
+                self.pub_vlim = self.create_publisher(
+                    VelocityLimit, "/planning/scenario_planning/max_velocity_default", 1)
+                time.sleep(0.3)
+            m = VelocityLimit()
+            m.stamp = self.get_clock().now().to_msg()
+            m.max_velocity = float(ms)
+            self.pub_vlim.publish(m)
+            done += 1
+        except Exception as e:
+            self.get_logger().warn(f"vlim pub: {e}")
+        self._res(f"max speed -> {kmh:.0f} km/h ({done} applied)")
+
     def _vehicle(self, model):
         """Swap the rviz vehicle model (roii shuttle <-> KETI-badged lexus)
         and restart rviz. Runs as root inside the container."""
@@ -773,6 +809,9 @@ async def handler(ws):
                 elif cmd == "goto":
                     BRIDGE.enqueue(("goto", data.get("x"), data.get("y")))
                     print(f"[cmd] goto {data.get('x')},{data.get('y')}")
+                elif cmd == "maxvel":
+                    BRIDGE.enqueue(("maxvel", float(data.get("kmh", 40))))
+                    print(f"[cmd] maxvel {data.get('kmh')}")
                 elif cmd == "map":
                     # map switch needs a full re-launch (host side). Write a
                     # request file that scripts/map_switch_daemon.sh acts on.
