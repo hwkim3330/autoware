@@ -55,9 +55,10 @@ same gateway/tablet tap-to-go; MGRS maps supported).
 | CARLA segfault / RPC starvation | Autoware startup burst starves CARLA | CPU partition: CARLA `taskset 0,8` (one HT pair), container `1-7,9-15` |
 | ros2 CLI false negatives | SHM port lock race across ~100 nodes | UDP-only Fast-DDS profile |
 
-Known limit: re-routing mid-session (stop → clear → new drive) can crash the
-behavior_planning container (rclcpp race; it respawns but planning may stay
-stuck). One route per session is solid — rerun the script for a new route.
+Re-routing works: tap a new destination any number of times mid-session. (The
+behavior_planning container is launched single-threaded — `component_container`
+not `_mt` — which removes the wait-set guard-condition race that used to crash
+it on every route reset.)
 
 ## Layout
 

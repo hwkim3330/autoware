@@ -393,3 +393,17 @@ now live on one dedicated thread, serialized with the respawn path.
 car away), teleport ×3 (sync mode can swallow one set_transform), wait for the
 lidar to see the new surroundings, re-seed /initialpose ×3, then poll until
 the EKF converges within 5 m of the spawn.
+
+## RE-ROUTING FIXED — single-threaded behavior_planning (2026-06-13)
+
+Setting a second destination mid-session crashed behavior_planning every time:
+`failed to add guard condition to wait set: guard condition implementation is
+invalid (rcl/wait.c)` -> std::terminate. Root cause: the stock container runs
+`component_container_mt` (MultiThreadedExecutor); when behavior resets its
+modules on a new route it recreates timers/subscriptions, and the MT executor
+races on the wait-set guard condition during that teardown.
+
+Fix (container_patches/behavior_planning.launch.xml, installed by the bring-up):
+force `exec="component_container"` (single-threaded) for behavior_planning_container
+ONLY. Verified: 3 consecutive re-routes, behavior deaths = 0, each engages
+AUTONOMOUS at ~27 km/h. No measurable planning-rate penalty (path ~6-7 Hz).
