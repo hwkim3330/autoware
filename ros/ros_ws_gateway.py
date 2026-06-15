@@ -412,36 +412,48 @@ class Bridge(Node):
         o = od[0].pose.pose
         ex, ey, q = o.position.x, o.position.y, o.orientation
         eyaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
-        # candidate goals 40-90m AHEAD (within ~70 deg of heading), nearest first.
-        # Ahead-on-lane goals route reliably; keeping few + nearest keeps drive fast
-        # even on large maps (Town04 ~17k centerline points).
-        cand = []
+        # candidate goals AHEAD (within ~75 deg of heading), nearest first.
+        # Wide distance band (25-160m): on some maps the only routable goal is
+        # close (short lanes/junctions, e.g. Town02) or far (long straights,
+        # e.g. Town05/Town10HD), so we no longer assume one sweet spot.
+        ahead, anyd = [], []
         for x, y, tg in self.centerlines:
             d = math.hypot(x - ex, y - ey)
-            if 40 < d < 90:
-                ang = math.atan2(y - ey, x - ex)
-                if abs((ang - eyaw + math.pi) % (2 * math.pi) - math.pi) < 1.3:
-                    cand.append((d, x, y, tg))
-        cand.sort()
-        if not cand:
-            # some lanelets store centerline points reversed vs travel direction
-            # -> "ahead" filter yields nothing. Fall back to any-direction goals;
-            # allow_goal_modification + the mission planner sort out routability.
-            cand = sorted((math.hypot(x - ex, y - ey), x, y, tg)
-                          for x, y, tg in self.centerlines
-                          if 40 < math.hypot(x - ex, y - ey) < 90)
-        # prefer a few farther goals first (a meaningful drive), then nearer ones
-        order = cand[len(cand) // 3: len(cand) // 3 + 4] + cand[:4]
-        self._res(f"finding route ({len(cand)} cand)")
+            if not (25 < d < 160):
+                continue
+            anyd.append((d, x, y, tg))
+            ang = math.atan2(y - ey, x - ex)
+            if abs((ang - eyaw + math.pi) % (2 * math.pi) - math.pi) < 1.3:
+                ahead.append((d, x, y, tg))
+        ahead.sort(); anyd.sort()
+
+        # Spread attempts across the band instead of clustering: goals at 55%,
+        # 75%, 35%, 90%... of the sorted distance range, then fill with the rest.
+        # Many maps reject the obvious near goal but accept one farther up the
+        # same road -- so we try generously (these rejects are fast, ~0.3s).
+        def ordered(cand):
+            out, seen, n = [], set(), len(cand)
+            picks = [int(n * f) for f in (0.55, 0.75, 0.35, 0.9, 0.15, 0.5, 0.25, 0.7)]
+            for i in picks + list(range(n)):
+                if 0 <= i < n and i not in seen:
+                    seen.add(i); out.append(cand[i])
+            return out
+
+        # Pass 1: goals AHEAD of the heading (route best when the spawn faces
+        # the lane). Pass 2: ANY-direction goals -- covers spawns whose heading
+        # is anti-parallel to the lane (Town10HD), where every "ahead" point
+        # sits on an unreachable/oncoming lanelet but a behind/side goal routes.
+        self._res(f"finding route ({len(ahead)} ahead / {len(anyd)} any)")
         self._prep_reroute()
-        for d, gx, gy, gtg in order[:5]:
-            # try the stored tangent AND its 180-deg flip: converted maps may
-            # store boundary roles swapped, so the tangent can be anti-parallel
-            # to the lane -- the planner rejects those instantly (cheap retry).
-            for g2 in (gtg, gtg + math.pi):
-                r = self._set_route_to(gx, gy, g2)
-                if (r and r.status.success) or self._route_is_set():
-                    self._engage(gx, gy); return
+        for pool, take in ((ahead, 14), (anyd, 16)):
+            for d, gx, gy, gtg in ordered(pool)[:take]:
+                # try the stored tangent AND its 180-deg flip: converted maps may
+                # store boundary roles swapped, so the tangent can be anti-parallel
+                # to the lane -- the planner rejects those instantly (cheap retry).
+                for g2 in (gtg, gtg + math.pi):
+                    r = self._set_route_to(gx, gy, g2, timeout=6.0)
+                    if (r and r.status.success) or self._route_is_set():
+                        self._engage(gx, gy); return
         # set_route_points can answer late; give the planner a moment, then check.
         time.sleep(2.0)
         if self._route_is_set():
