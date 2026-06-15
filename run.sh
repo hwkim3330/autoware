@@ -51,6 +51,7 @@ case "$CMD" in
     ;;
   multimode) MULTIMODE=1 exec bash "$REPO/scripts/run_localization_demo.sh" "${2:-$TOWN_DEFAULT}" ;;
   roii)      exec bash "$REPO/scripts/run_roii_lidar_${2:-low}.sh" "${3:-$TOWN_DEFAULT}" ;;
+  mapdaemon) exec bash "$REPO/scripts/map_switch_daemon.sh" ;;
   Town*)     SUDO docker start autoware >/dev/null 2>&1; exec bash "$REPO/scripts/run_localization_demo.sh" "$CMD" ;;
   *)         grep -E "^#   ./run.sh" "$0" | sed 's/^#   //'; exit 1 ;;
 esac

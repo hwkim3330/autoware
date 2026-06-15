@@ -70,7 +70,7 @@ def load_centerlines(path):
     try:
         txt = open(path).read().replace("'", '"')  # JOSM single quotes
     except Exception:
-        return [], []
+        return [], [], {}
     nd = {}
     for m in re.finditer(r'<node id="(-?\d+)"[^>]*>(.*?)</node>', txt, re.S):
         b = m.group(2)
@@ -100,7 +100,9 @@ def load_centerlines(path):
         if refs:
             wy[m.group(1)] = [nd[r] for r in refs]
     pts, polys = [], []
+    lane_by_id = {}   # lanelet_id -> full centerline polyline (for full route)
     for m in re.finditer(r'<relation id="(-?\d+)"[^>]*>(.*?)</relation>', txt, re.S):
+        lid = m.group(1)
         b = m.group(2)
         if 'v="lanelet"' not in b:
             continue
@@ -129,8 +131,10 @@ def load_centerlines(path):
         poly = cl[::step]
         if poly[-1] != cl[-1]:
             poly.append(cl[-1])
-        polys.append([[round(p[0], 1), round(p[1], 1)] for p in poly])
-    return pts, polys
+        ds = [[round(p[0], 1), round(p[1], 1)] for p in poly]
+        polys.append(ds)
+        lane_by_id[lid] = ds
+    return pts, polys, lane_by_id
 
 
 class Bridge(Node):
@@ -142,7 +146,8 @@ class Bridge(Node):
         self.lidar_t = []
         self.cmds = deque()
         self.last_cmd_result = ""
-        self.centerlines, self.lane_polys = load_centerlines(MAP_OSM)
+        self.centerlines, self.lane_polys, self.lane_by_id = load_centerlines(MAP_OSM)
+        self.route_path = []   # full route to goal (lanelet centerlines), for the app
         self.get_logger().info(
             f"loaded {len(self.centerlines)} centerline points, {len(self.lane_polys)} lane polylines")
 
@@ -167,6 +172,14 @@ class Bridge(Node):
         self.create_subscription(_Str, "/roii/lidar_health",
                                  lambda m: self._set("roii_health", m), 1)
         self.pub_roii_fault = self.create_publisher(_Str, "/roii/fault_injector/command", 10)
+        # full route to the goal (lanelet sequence) for the tablet — the whole
+        # path to the destination, not just the local trajectory.
+        try:
+            from autoware_planning_msgs.msg import LaneletRoute
+            self.create_subscription(LaneletRoute, "/planning/mission_planning/route",
+                                     self._on_route, tl)
+        except Exception:
+            pass
         # vehicle status / safety for the full-Autoware dashboard
         from autoware_vehicle_msgs.msg import SteeringReport, TurnIndicatorsReport
         self.create_subscription(SteeringReport, "/vehicle/status/steering_status",
@@ -300,6 +313,22 @@ class Bridge(Node):
     def _set(self, k, m):
         with self.lock:
             self.s[k] = (m, time.monotonic())
+
+    def _on_route(self, msg):
+        """Build the FULL route polyline (goal -> ego) from the route's lanelet
+        segments, looked up in the osm centerline map. Sent to the tablet so it
+        draws the complete path to the destination, not just the local trajectory."""
+        path = []
+        try:
+            for seg in msg.segments:
+                lid = str(seg.preferred_primitive.id)
+                poly = self.lane_by_id.get(lid) or self.lane_by_id.get(str(-int(lid)))
+                if poly:
+                    path.extend(poly)
+        except Exception:
+            pass
+        with self.lock:
+            self.route_path = path
 
     def _part_tick(self, key):
         now = time.monotonic()
@@ -702,7 +731,8 @@ class Bridge(Node):
                              "pipeline": "DUAL" if lidar_ok else "FALLBACK", "ndtHz": round(ndt_hz, 1)},
             "operationMode": {"mode": OP_MODE.get(op, "UNKNOWN"), "raw": op, "autonomousAvailable": op_avail},
             "route": {"state": ROUTE_STATE.get(rstate, "UNKNOWN"), "raw": rstate,
-                      "trajPoints": ntraj, "trajPath": traj_path},
+                      "trajPoints": ntraj, "trajPath": traj_path,
+                      "routePath": (self.route_path if rstate in (2, 4) else [])},
             "vehicle": {"steerDeg": steer_deg, "turn": blink, "mrm": mrm,
                         "plannedKmh": planned_kmh},
             "roii": (json.loads(s["roii_health"][0].data)
@@ -743,6 +773,14 @@ async def handler(ws):
                 elif cmd == "goto":
                     BRIDGE.enqueue(("goto", data.get("x"), data.get("y")))
                     print(f"[cmd] goto {data.get('x')},{data.get('y')}")
+                elif cmd == "map":
+                    # map switch needs a full re-launch (host side). Write a
+                    # request file that scripts/map_switch_daemon.sh acts on.
+                    town = str(data.get("town", "Town04"))
+                    if town.replace("Town", "").replace("HD", "").isdigit():
+                        open("/tmp/roii_map_request", "w").write(town)
+                        BRIDGE.last_cmd_result = f"map switch -> {town} (재기동, ~4분)"
+                        print(f"[cmd] map -> {town}")
                 elif cmd == "fault":
                     import json as _json
                     payload = {k: v for k, v in data.items() if k != "cmd"}
