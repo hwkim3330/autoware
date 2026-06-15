@@ -487,12 +487,25 @@ class Bridge(Node):
         gx, gy, gtg = ranked[0]
         self._res(f"goto ({tx:.0f},{ty:.0f}) -> snapped {math.hypot(gx-tx, gy-ty):.0f}m")
         self._prep_reroute()
-        # 1) exact snap, ONE short attempt each orientation (goal-ineligible
-        #    lanelets -- intersection interiors -- make the planner hang)
-        for g2 in (gtg, gtg + math.pi):
-            r = self._set_route_to(gx, gy, g2, timeout=8.0)
-            if (r and r.status.success) or self._route_is_set():
-                self._engage(gx, gy); return
+        # 1) try the tapped spot itself: the nearest distinct centerline points
+        #    around the tap (within 18 m), each with its lane tangent + flip.
+        #    A single snap point often lands on a goal-ineligible lanelet
+        #    (intersection interior / opposing lane); trying several nearby
+        #    points on real lanes makes "go exactly where I tapped" land.
+        near = []
+        for x, y, tg in ranked:
+            d = math.hypot(x - tx, y - ty)
+            if d > 18:
+                break
+            if all(math.hypot(x - q[0], y - q[1]) > 4.0 for q in near):
+                near.append((x, y, tg))
+            if len(near) >= 8:
+                break
+        for cx2, cy2, ct in near:
+            for g2 in (ct, ct + math.pi):
+                r = self._set_route_to(cx2, cy2, g2, timeout=6.0)
+                if (r and r.status.success) or self._route_is_set():
+                    self._engage(cx2, cy2); return
         # 2) fallback: drive TOWARD the tap -- proven drive-style goals 40-90 m
         #    from the ego in the tap's bearing; user taps again as they close in.
         with self.lock:
