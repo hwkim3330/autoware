@@ -169,11 +169,14 @@ else
     "sed -i 's|value=\"/localization/multimode/pose_with_covariance\"|value=\"/localization/pose_estimator/pose_with_covariance\"|' $PTF" >/dev/null 2>&1
 fi
 
-# Cruise speed: planner global cap (default 4.17 m/s = 15 km/h). 8.33 = 30 km/h;
-# actual speed = min(this, lanelet speed_limit, curve/decel constraints).
+# Cruise speed: planner global cap. MAXVEL env (km/h) sets it; default 40 km/h.
+# Actual speed = min(this, lanelet speed_limit, curve/decel constraints), so
+# the lanelet speed_limit (Town04 osm = 40) may also need raising for >40.
+MV_MS=$(python3 -c "print(round(${MAXVEL:-40}/3.6, 2))")
 SUDO docker exec autoware bash -lc \
-  "sed -i 's/max_vel: 4.17/max_vel: 8.33/' \
+  "sed -i -E 's/max_vel: [0-9.]+/max_vel: $MV_MS/' \
    /opt/autoware/share/autoware_launch/config/planning/scenario_planning/common/common.param.yaml" >/dev/null 2>&1
+echo "    cruise cap: ${MAXVEL:-40} km/h (max_vel=$MV_MS m/s)"
 
 # Set the aligned spawn as the interface's spawn_point default (e2e_simulator does
 # not forward a spawn_point arg, so we bake it into the patched launch file).
