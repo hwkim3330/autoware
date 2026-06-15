@@ -177,6 +177,12 @@ SUDO docker exec autoware bash -lc \
   "sed -i -E 's/max_vel: [0-9.]+/max_vel: $MV_MS/' \
    /opt/autoware/share/autoware_launch/config/planning/scenario_planning/common/common.param.yaml" >/dev/null 2>&1
 echo "    cruise cap: ${MAXVEL:-40} km/h (max_vel=$MV_MS m/s)"
+# lanelet speed_limit caps actual speed too -- raise it to MAXVEL so the planner
+# cap isn't masked by a 40 km/h map limit (only when MAXVEL > 40).
+if [ "${MAXVEL:-40}" -gt 40 ] 2>/dev/null; then
+  SUDO docker exec autoware bash -lc \
+    "sed -i -E 's#k=\"speed_limit\" v=\"[0-9.]+\"#k=\"speed_limit\" v=\"${MAXVEL}.00\"#g' /root/autoware_map/$TOWN/lanelet2_map.osm" >/dev/null 2>&1
+fi
 
 # Set the aligned spawn as the interface's spawn_point default (e2e_simulator does
 # not forward a spawn_point arg, so we bake it into the patched launch file).
