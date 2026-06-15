@@ -284,12 +284,21 @@ SUDO docker exec autoware bash -lc \
 echo "==> Start ROS->WebSocket gateway (tablet app) + rviz on the monitor"
 # dedupe helpers in a SEPARATE exec: a pkill inside the same shell string as the
 # daemon commands matches (and kills) that very shell.
-SUDO docker exec autoware bash -c 'pkill -9 -f perception_stub.py; pkill -9 -f multimode_supervisor.py; pkill -9 -f ros_ws_gateway.py; exit 0' >/dev/null 2>&1
+SUDO docker exec autoware bash -c 'pkill -9 -f multimode_supervisor.py; pkill -9 -f ros_ws_gateway.py; exit 0' >/dev/null 2>&1
 sleep 1
+# perception_stub MUST keep running for autonomous mode (perception rate-check
+# diags gate /autoware/modes/autonomous). It was started in the e2e loop; make
+# SURE it's alive here (a previous version killed it and never restarted it ->
+# AUTO refused to engage). Restart only if not already publishing.
+SUDO docker exec autoware bash -lc \
+  "pgrep -f perception_stub.py >/dev/null || { export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; setsid python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1 < /dev/null & }" >/dev/null 2>&1
+if [ "${MULTIMODE:-0}" = "1" ]; then
+  SUDO docker exec -d autoware bash -lc \
+    "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/multimode_supervisor.py --ros-args -p use_sim_time:=true > /tmp/multimode.log 2>&1"
+fi
+# gateway in its OWN docker exec -d (not chained with &, which left it unbound)
 SUDO docker exec -d autoware bash -lc \
-  "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
-  [ "${MULTIMODE:-0}" = "1" ] && python3 /root/multimode_supervisor.py --ros-args -p use_sim_time:=true > /tmp/multimode.log 2>&1 &
-   export LANELET_OSM=/root/autoware_map/'$TOWN'/lanelet2_map.osm; export CARLA_SPAWN='"$SPAWN"'; export RVIZ_DISPLAY='"$DISP"'; python3 /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
+  "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export LANELET_OSM=/root/autoware_map/$TOWN/lanelet2_map.osm; export CARLA_SPAWN='$SPAWN'; export RVIZ_DISPLAY=$DISP; source /opt/autoware/setup.bash; python3 -u /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
 for i in $(seq 1 60); do
   SUDO docker exec autoware bash -lc "ss -tlnp 2>/dev/null | grep -q 8765" 2>/dev/null && { echo "    gateway up (ws:8765)"; break; }
   sleep 2
