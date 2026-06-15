@@ -22,11 +22,15 @@ for TOWN in $TOWNS; do
   echo "=== [$TOWN] bring-up ==="
   bash "$REPO/scripts/run_localization_demo.sh" "$TOWN" > "/tmp/towntest_${TOWN}_up.log" 2>&1
   LOC=$(grep -c 'Translation' "/tmp/towntest_${TOWN}_up.log" || true)
-  sleep 5
   echo "=== [$TOWN] drive ==="
+  # wait for the gateway to be discovered (drive fires too early otherwise ->
+  # false 'partial'); then drive, retry once if it didn't reach AUTONOMOUS.
   SUDO docker exec autoware bash -lc \
     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
-     python3 /root/drive_monitor.py drive" > "/tmp/towntest_${TOWN}_drive.log" 2>&1 || true
+     for i in \$(seq 1 20); do ss -tlnp 2>/dev/null | grep -q 8765 && break; sleep 1; done; sleep 14; \
+     R=\$(python3 /root/drive_monitor.py drive 2>/dev/null); echo \"\$R\"; \
+     echo \"\$R\" | grep -q AUTONOMOUS || { sleep 3; python3 /root/drive_monitor.py drive 2>/dev/null; }" \
+    > "/tmp/towntest_${TOWN}_drive.log" 2>&1 || true
   SUDO docker cp autoware:/tmp/e2e.log "/tmp/towntest_${TOWN}_e2e.log" >/dev/null 2>&1 || true
 
   python3 - "$TOWN" "$LOC" "/tmp/towntest_${TOWN}_drive.log" "$OUT" <<'PY'
