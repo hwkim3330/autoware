@@ -643,64 +643,72 @@ class Bridge(Node):
         self._res("goto: no routable goal near tap")
 
     def _respawn(self):
-        """Teleport the CARLA ego back to the spawn point and re-seed the
-        localization -- recovers from wall crashes without a full relaunch."""
-        if not CARLA_SPAWN:
-            self._res("respawn: no CARLA_SPAWN configured"); return
-        # 1) STOP + route clear FIRST -- otherwise autonomous keeps driving the
-        #    teleported car away while we re-seed localization.
+        """Recover the ego onto the road after a crash / off-lane drift, without
+        a full relaunch. Tries the validated fixed spawn FIRST (NDT converges
+        reliably there), then the nearest lane centerline as a fallback. NDT can
+        diverge when re-seeded at an arbitrary point, so each target is verified
+        and we move on if it doesn't converge."""
+        # STOP + clear ONCE so autonomous doesn't drive the teleported car away.
         try:
             self._call(self.cli_stop, ChangeOperationMode.Request(), timeout=6.0)
         except Exception:
             pass
         self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
         time.sleep(1.0)
-        try:
-            x, y, z, roll, pitch, yaw = [float(v) for v in CARLA_SPAWN.split(",")]
-            with self._carla_lock:
-                ego = self._carla_ego()
-                if ego is None:
-                    self._res("respawn: ego not found"); return
-                carla = self._carla_mod
-                tf = carla.Transform(carla.Location(x=x, y=y, z=z + 0.3),
-                                     carla.Rotation(roll=roll, pitch=pitch, yaw=yaw))
-                for _ in range(3):   # sync mode can swallow one set_transform
-                    ego.set_target_velocity(carla.Vector3D(0, 0, 0))
-                    ego.set_angular_velocity(carla.Vector3D(0, 0, 0))
-                    ego.set_transform(tf)
-                    time.sleep(0.3)
-            self._res("teleported; re-seeding localization")
-        except Exception as e:
-            self._res(f"respawn error: {e}"); return
-        time.sleep(2.0)   # let the lidar see the new surroundings
-        # 2) initialpose 재시딩 (CARLA -> Autoware: y/yaw 부호 반전), 3회 발행
+        # candidate CARLA poses (x,y,z,roll,pitch,yaw), reliable first
+        cands = []
+        if CARLA_SPAWN:
+            cands.append(("spawn", [float(v) for v in CARLA_SPAWN.split(",")]))
+        with self.lock:
+            od = self.s.get("odom")
+        if od and self.centerlines:
+            o = od[0].pose.pose
+            ex, ey = o.position.x, o.position.y
+            ax, ay, atan = min(self.centerlines,
+                               key=lambda c: math.hypot(c[0] - ex, c[1] - ey))
+            cands.append(("nearest-lane", (ax, -ay, 0.5, 0.0, 0.0, -math.degrees(atan))))
+        if not cands:
+            self._res("respawn: no spawn and no lane/odom"); return
+        for label, t in cands:
+            self._res(f"recovering via {label}...")
+            if self._teleport_to(*t):
+                self._res(f"respawn OK ({label}) -- on lane, ready to DRIVE"); return
+        self._res("respawn: localization did not converge (try DRIVE or relaunch)")
+
+    def _teleport_to(self, x, y, z, roll, pitch, yaw):
+        """Recover to a CARLA pose by publishing /initialpose. The CARLA
+        interface OWNS the ego and ticks the sim, so its initialpose_callback
+        does the actual set_transform (a secondary client's set_transform is
+        swallowed in sync mode -- that's what made earlier respawns diverge).
+        This is exactly how the bring-up seeds localization, so NDT converges.
+        Returns True iff NDT settles within 5 m. (x,y,z,...) are CARLA coords."""
+        ax, ay = x, -y                 # CARLA -> Autoware (map frame) y-flip
+        awyaw = math.radians(-yaw)     # yaw-flip
         from geometry_msgs.msg import PoseWithCovarianceStamped
         if not hasattr(self, "pub_init"):
             self.pub_init = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 1)
             time.sleep(0.5)
-        awyaw = math.radians(-yaw)
         for _ in range(3):
             m = PoseWithCovarianceStamped()
             m.header.frame_id = "map"
             m.header.stamp = self.get_clock().now().to_msg()
-            m.pose.pose.position.x = x
-            m.pose.pose.position.y = -y
+            m.pose.pose.position.x = ax
+            m.pose.pose.position.y = ay
             m.pose.pose.orientation.z = math.sin(awyaw / 2)
             m.pose.pose.orientation.w = math.cos(awyaw / 2)
             m.pose.covariance[0] = m.pose.covariance[7] = 0.25
             m.pose.covariance[35] = 0.068
             self.pub_init.publish(m)
             time.sleep(1.5)
-        # 3) 수렴 확인
-        for i in range(10):
+        for _ in range(10):
             time.sleep(1.0)
             with self.lock:
                 od = self.s.get("odom")
             if od:
                 p = od[0].pose.pose.position
-                if math.hypot(p.x - x, p.y - (-y)) < 5.0:
-                    self._res("respawn OK -- at spawn, ready"); return
-        self._res("respawn: teleported but localization not converged (try again)")
+                if math.hypot(p.x - ax, p.y - ay) < 5.0:
+                    return True
+        return False
 
     def _set_maxvel(self, kmh):
         """Runtime cruise-speed change (no re-launch): set max_vel on the nodes
