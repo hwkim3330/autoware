@@ -223,18 +223,23 @@ CTLYAML=/opt/autoware/share/autoware_launch/config/system/diagnostics/control.ya
 SUDO docker exec autoware bash -lc \
   "sed -i '/link: \/autoware\/control\/topic_rate_check\/trajectory_follower }/d; /link: \/autoware\/control\/topic_rate_check\/control_command }/d; /link: \/autoware\/control\/performance_monitoring\/lane_departure }/d; /link: \/autoware\/control\/performance_monitoring\/control_state }/d' $CTLYAML" >/dev/null 2>&1 || true
 
-echo "==> [3/5] Clear stale ROS processes (full container restart)"
-# docker restart occasionally no-ops (returns stale) leaving DETACHED e2e
-# launches alive -> duplicate Autoware stacks starve planning (trajectory drops
-# to ~5 Hz, autonomous never becomes available). Restart, then VERIFY no e2e
-# survived; retry once with an explicit in-container kill if it did.
-SUDO docker restart -t 3 autoware >/dev/null 2>&1 || true; sleep 6
+echo "==> [3/5] Clear stale ROS processes (stop+start -- NOT docker restart)"
+# CRITICAL: use `docker stop` + `docker start`, NOT `docker restart`. `restart`
+# does NOT re-run the nvidia-container-runtime prestart hook, so it leaves the
+# GPU cgroup stale -> inside the container `nvidia-smi` gives "Failed to
+# initialize NVML" and CUDA nodes (CenterPoint/YOLOX) die with cudaErrorNoDevice
+# (CARLA's Vulkan path survives, which masks it). stop+start re-runs the hook
+# and restores CUDA. stop+start also fully clears detached e2e launches (the old
+# duplicate-stack problem) since the container process tree is torn down.
+restart_container() { SUDO docker stop -t 5 autoware >/dev/null 2>&1; SUDO docker start autoware >/dev/null 2>&1; sleep 6; }
+restart_container
 LEFT=$(SUDO docker exec autoware pgrep -fc e2e_simulator 2>/dev/null | tr -dc 0-9)
 if [ "${LEFT:-0}" != "0" ]; then
-  echo "    stale e2e survived restart ($LEFT) -- force-killing + restarting again"
-  SUDO docker exec autoware bash -lc 'pkill -9 -f "e2e_simulator|component_container|autoware_launch"; exit 0' >/dev/null 2>&1
-  SUDO docker restart -t 3 autoware >/dev/null 2>&1 || true; sleep 6
+  echo "    stale e2e survived ($LEFT) -- stop+start again"
+  restart_container
 fi
+# verify CUDA is visible (so perception modes work); warn if not
+SUDO docker exec autoware bash -lc 'nvidia-smi -L >/dev/null 2>&1' && echo "    GPU/CUDA OK in container" || echo "    WARN: CUDA not visible (perception will fail) -- container needs recreate"
 
 # A component container occasionally dies DURING startup (rclcpp race under the
 # launch burst); its respawn then deadlocks (behavior waits for scenario,
