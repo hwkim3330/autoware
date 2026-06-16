@@ -2,6 +2,7 @@
 """Minimal perception stub: publishes EMPTY perception outputs so the planner
 generates a trajectory without running heavy (camera/lidar) detection. Matches
 the ROii camera-OFF setup — treats the road as clear (no dynamic objects)."""
+import os
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
@@ -13,6 +14,9 @@ from nav_msgs.msg import OccupancyGrid
 class Stub(Node):
     def __init__(self):
         super().__init__("perception_stub")
+        # when carla_objects_bridge owns the objects topic, don't also publish
+        # empty objects here (they would flicker against the real ones).
+        self._emit_objs = os.environ.get("CARLA_OBJECTS_BRIDGE", "0") != "1"
         self.objs = self.create_publisher(PredictedObjects, "/perception/object_recognition/objects", 1)
         be = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST)
         self.pc = self.create_publisher(PointCloud2, "/perception/obstacle_segmentation/pointcloud", be)
@@ -31,7 +35,8 @@ class Stub(Node):
         h = Header(); h.stamp = self.get_clock().now().to_msg(); h.frame_id = frame; return h
 
     def tick(self):
-        po = PredictedObjects(); po.header = self.hdr("map"); self.objs.publish(po)
+        if self._emit_objs:
+            po = PredictedObjects(); po.header = self.hdr("map"); self.objs.publish(po)
         pc = PointCloud2(); pc.header = self.hdr("base_link")
         pc.height = 1; pc.width = 0
         pc.fields = [PointField(name=n, offset=o, datatype=PointField.FLOAT32, count=1)
