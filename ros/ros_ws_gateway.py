@@ -249,7 +249,14 @@ class Bridge(Node):
             self._arm_teleop()
 
     def _carla_ego(self):
-        """Lazy CARLA client + ego handle for direct manual control."""
+        """Lazy CARLA client + ego handle for direct manual control.
+
+        Reverse only works when this returns the actor; if it returns None the
+        manual loop is skipped and the Autoware chain just BRAKES on negative
+        velocity (no backward motion). So the lookup must be robust: accept
+        several role_names, fall back to the sole vehicle, and -- crucially --
+        wait_for_tick() because a second sync-mode client's get_actors() can come
+        back empty until the world ticks."""
         try:
             import carla
             if not hasattr(self, "_carla_cl"):
@@ -257,12 +264,26 @@ class Bridge(Node):
                 self._carla_cl.set_timeout(5.0)
                 self._carla_mod = carla
             ego = getattr(self, "_carla_ego_a", None)
-            if ego is None or not ego.is_alive:
-                ego = next((a for a in self._carla_cl.get_world().get_actors().filter("vehicle.*")
-                            if a.attributes.get("role_name") == "ego_vehicle"), None)
-                self._carla_ego_a = ego
+            if ego is not None and ego.is_alive:
+                return ego
+            world = self._carla_cl.get_world()
+            try:
+                world.wait_for_tick(2.0)   # sync-mode: actors empty until a tick
+            except Exception:
+                pass
+            vehicles = list(world.get_actors().filter("vehicle.*"))
+            ego = next((a for a in vehicles
+                        if a.attributes.get("role_name") in ("ego_vehicle", "hero", "ego")), None)
+            if ego is None and len(vehicles) == 1:
+                ego = vehicles[0]            # only one vehicle -> it's the ego
+            self._carla_ego_a = ego
+            if ego is None:
+                self.get_logger().warn(
+                    f"_carla_ego: no ego among {len(vehicles)} vehicles "
+                    f"(roles={[a.attributes.get('role_name') for a in vehicles]}) -- reverse disabled")
             return ego
-        except Exception:
+        except Exception as e:
+            self.get_logger().warn(f"_carla_ego error: {e}")
             return None
 
     def _carla_loop(self):
