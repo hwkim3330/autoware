@@ -44,7 +44,7 @@ case "$TOWN" in
   Town05)   SPAWN="-184.6, -31.8, 0.9, 0.0, 0.0, -90.0" ;;
   Town06)   SPAWN="606.8, 152.4, 0.6, 0.0, 0.0, 0.2" ;;
   Town07)   SPAWN="-31.4, -109.0, 0.6, 0.0, 0.0, -179.8" ;;
-  Town10HD) SPAWN="19.4, -57.4, 0.5, 0.0, 0.0, -180.0" ;;
+  Town10HD) SPAWN="31.6, -60.9, 0.5, 0.0, 0.0, -0.0" ;;
   *)        SPAWN="None" ;;
 esac
 echo "==> Town=$TOWN  aligned spawn=[$SPAWN]"
