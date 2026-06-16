@@ -224,7 +224,17 @@ SUDO docker exec autoware bash -lc \
   "sed -i '/link: \/autoware\/control\/topic_rate_check\/trajectory_follower }/d; /link: \/autoware\/control\/topic_rate_check\/control_command }/d; /link: \/autoware\/control\/performance_monitoring\/lane_departure }/d; /link: \/autoware\/control\/performance_monitoring\/control_state }/d' $CTLYAML" >/dev/null 2>&1 || true
 
 echo "==> [3/5] Clear stale ROS processes (full container restart)"
-SUDO docker restart autoware >/dev/null 2>&1 || true; sleep 6
+# docker restart occasionally no-ops (returns stale) leaving DETACHED e2e
+# launches alive -> duplicate Autoware stacks starve planning (trajectory drops
+# to ~5 Hz, autonomous never becomes available). Restart, then VERIFY no e2e
+# survived; retry once with an explicit in-container kill if it did.
+SUDO docker restart -t 3 autoware >/dev/null 2>&1 || true; sleep 6
+LEFT=$(SUDO docker exec autoware pgrep -fc e2e_simulator 2>/dev/null | tr -dc 0-9)
+if [ "${LEFT:-0}" != "0" ]; then
+  echo "    stale e2e survived restart ($LEFT) -- force-killing + restarting again"
+  SUDO docker exec autoware bash -lc 'pkill -9 -f "e2e_simulator|component_container|autoware_launch"; exit 0' >/dev/null 2>&1
+  SUDO docker restart -t 3 autoware >/dev/null 2>&1 || true; sleep 6
+fi
 
 # A component container occasionally dies DURING startup (rclcpp race under the
 # launch burst); its respawn then deadlocks (behavior waits for scenario,
