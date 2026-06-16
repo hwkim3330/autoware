@@ -222,6 +222,14 @@ class Bridge(Node):
         self.pub_ctrl = self.create_publisher(Control, "/control/command/control_cmd", 1)
         self.pub_gate = self.create_publisher(GateMode, "/control/gate_mode_cmd", 1)
         self.pub_gear = self.create_publisher(GearCommand, "/control/command/gear_cmd", 1)
+        # Manual control bypasses the cmd_gate by publishing actuation directly to
+        # the CARLA interface (verified to move the ego). Reverse uses a dedicated
+        # latch the gate can't override (gear_cmd is contended by the gate's PARK).
+        from tier4_vehicle_msgs.msg import ActuationCommandStamped as _Act
+        from std_msgs.msg import Bool as _Bool
+        self.pub_act = self.create_publisher(_Act, "/control/command/actuation_cmd", 1)
+        self.pub_manrev = self.create_publisher(_Bool, "/roii/manual_reverse", 1)
+        self._Act, self._Bool = _Act, _Bool
         self.cli_pause = self.create_client(SetPause, "/control/vehicle_cmd_gate/set_pause", callback_group=cbg)
         self.teleop = {"v": 0.0, "steer": 0.0, "until": 0.0}
         self._teleop_armed = False
@@ -327,9 +335,26 @@ class Bridge(Node):
         g = GearCommand(); g.stamp = now
         g.command = 20 if tp["v"] < -0.01 else 2
         self.pub_gear.publish(g)
-        # Direct CARLA control happens in a DEDICATED thread (_carla_loop):
-        # libcarla is not thread-safe; calling it from the 100 Hz reentrant
-        # executor timer caused silent SIGSEGV crashes of the gateway.
+        rev = tp["v"] < -0.05
+        # Dedicated reverse latch -> interface (gear_cmd is overridden by the
+        # gate's PARK, so this is what actually flips CARLA into reverse).
+        b = self._Bool(); b.data = bool(rev); self.pub_manrev.publish(b)
+        # Publish actuation DIRECTLY to the interface (bypasses the cmd_gate,
+        # which parks/brakes when not engaged). accel for forward; for reverse
+        # send brake_cmd -- the interface's reverse patch maps brake->throttle
+        # when the reverse latch is set. Verified to move the ego both ways.
+        mag = min(abs(tp["v"]) / 6.0, 1.0) * 0.6
+        a = self._Act(); a.header.stamp = now
+        if abs(tp["v"]) < 0.05:
+            a.actuation.accel_cmd = 0.0; a.actuation.brake_cmd = 0.4
+        elif rev:
+            a.actuation.accel_cmd = 0.0; a.actuation.brake_cmd = mag
+        else:
+            a.actuation.accel_cmd = mag; a.actuation.brake_cmd = 0.0
+        a.actuation.steer_cmd = tp["steer"]
+        self.pub_act.publish(a)
+        # Direct CARLA control also runs in a DEDICATED thread (_carla_loop) as a
+        # backup; libcarla is not thread-safe so it must not be called here.
 
     def _set(self, k, m):
         with self.lock:
