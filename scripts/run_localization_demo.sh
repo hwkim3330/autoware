@@ -336,7 +336,13 @@ for i in $(seq 1 60); do
   sleep 2
 done
 command -v adb >/dev/null && adb reverse tcp:8765 tcp:8765 >/dev/null 2>&1 || true
-# rviz on the host monitor (CARLA is RenderOffScreen, so the GPU display is free)
+# rviz on the host monitor (CARLA is RenderOffScreen, so the GPU display is free).
+# rviz2 can burn ~0.7-1 CPU core; the tablet app shows the same live state, so
+# RVIZ=0 skips it to leave CPU headroom -- useful for the heavier 4-LiDAR/ROii
+# modes (perception, concat) where planning competes for cores.
+if [ "${RVIZ:-1}" = "0" ]; then
+  echo "    rviz skipped (RVIZ=0) -- use the tablet app for visualization"
+elif true; then
 DISPLAY=$DISP XAUTHORITY=$XA xhost +local: >/dev/null 2>&1 || true
 if [ -n "${ROII_PROFILE:-}" ]; then
   SUDO docker cp "$REPO/rviz/roii_lidar_fault.rviz" autoware:/root/roii_lidar_fault.rviz >/dev/null 2>&1
@@ -347,6 +353,7 @@ else
    source /opt/autoware/setup.bash; \
    rviz2 -d /root/autoware_no_camera.rviz > /tmp/rviz.log 2>&1"
 fi
-echo "Done. Gateway: ws://<host>:8765/ws (adb reverse for USB). rviz on the monitor."
+fi
+echo "Done. Gateway: ws://<host>:8765/ws (adb reverse for USB). rviz on the monitor (unless RVIZ=0)."
 echo "CARLA log: /tmp/carla.log   Autoware log: docker exec autoware tail -f /tmp/e2e.log"
 exit 0
