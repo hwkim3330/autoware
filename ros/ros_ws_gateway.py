@@ -827,9 +827,18 @@ async def handler(ws):
                 elif cmd == "map":
                     # map switch needs a full re-launch (host side). Write a
                     # request file that scripts/map_switch_daemon.sh acts on.
+                    # The gateway runs INSIDE the container whose /tmp is NOT
+                    # shared with the host -- route the request through the
+                    # autoware_map bind mount (/root/autoware_map <-> host
+                    # /home/kim/autoware_map), which the daemon watches.
                     town = str(data.get("town", "Town04"))
                     if town.replace("Town", "").replace("HD", "").isdigit():
-                        open("/tmp/roii_map_request", "w").write(town)
+                        for p in ("/root/autoware_map/.roii_map_request",
+                                  "/tmp/roii_map_request"):
+                            try:
+                                open(p, "w").write(town)
+                            except OSError:
+                                pass
                         BRIDGE.last_cmd_result = f"map switch -> {town} (재기동, ~4분)"
                         print(f"[cmd] map -> {town}")
                 elif cmd == "fault":
