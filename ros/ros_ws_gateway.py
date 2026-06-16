@@ -211,6 +211,7 @@ class Bridge(Node):
         self.cli_route = self.create_client(SetRoutePoints, "/api/routing/set_route_points", callback_group=cbg)
         self.cli_auto = self.create_client(ChangeOperationMode, "/api/operation_mode/change_to_autonomous", callback_group=cbg)
         self.cli_stop = self.create_client(ChangeOperationMode, "/api/operation_mode/change_to_stop", callback_group=cbg)
+        self._emergency = False   # set by trigger_emergency, cleared by heal/drive
         self.create_timer(0.5, self._process_cmds, callback_group=cbg)
         # ---- manual teleop (joystick) ----
         # External (manual joystick) control path: gate EXTERNAL + unpause, then
@@ -422,12 +423,16 @@ class Bridge(Node):
                 self.pub_roii_fault.publish(_Str(data=cmd[1]))
                 self._res(f"roii fault cmd: {cmd[1][:60]}")
             elif cmd == "trigger_emergency":
-                # Phase B: placeholder -- wire the actual fail-safe target in
-                # Phase C (configurable topic/service).
-                self._res("trigger_emergency: not wired (Phase C)")
+                # Controlled emergency stop: switch the operation mode to STOP
+                # (the ADAPI-blessed hard stop). Latch _emergency so the frame
+                # reports it to the tablet as a red banner until healed/driven.
+                self._emergency = True
+                self._call(self.cli_stop, ChangeOperationMode.Request(), timeout=6.0)
+                self._res("EMERGENCY STOP")
             elif cmd == "heal":
                 from std_msgs.msg import String as _Str
                 self.pub_inject.publish(_Str(data="clear"))
+                self._emergency = False
                 self._res("fault cleared -> auto mode selection")
             elif isinstance(cmd, tuple) and cmd[0] == "vehicle":
                 self._vehicle(cmd[1])
@@ -451,6 +456,7 @@ class Bridge(Node):
         return fut.result()
 
     def _drive(self):
+        self._emergency = False    # a new drive clears a prior emergency stop
         with self.lock:
             od = self.s.get("odom")
         if not od:
@@ -787,6 +793,8 @@ class Bridge(Node):
             mm = s["mrm"][0]
             if getattr(mm, "state", 0) not in (0, 1):   # not NORMAL
                 mrm = {2: "MRM_OPERATING", 3: "MRM_SUCCEEDED", 4: "MRM_FAILED"}.get(mm.state, "MRM")
+        if self._emergency:           # manual emergency stop overrides
+            mrm = "EMERGENCY STOP"
         planned_kmh = 0.0
         if "traj" in s and fresh("traj", 5) and s["traj"][0].points:
             planned_kmh = round(s["traj"][0].points[0].longitudinal_velocity_mps * 3.6, 1)
