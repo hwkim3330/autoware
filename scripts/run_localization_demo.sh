@@ -319,7 +319,10 @@ sleep 1
 # AUTO refused to engage). Restart only if not already publishing.
 SUDO docker exec autoware bash -lc \
   "pgrep -f perception_stub.py >/dev/null || { export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; setsid python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1 < /dev/null & }" >/dev/null 2>&1
-if [ "${MULTIMODE:-0}" = "1" ]; then
+# Multimode supervisor: in MULTIMODE it owns the EKF pose source; in ROii mode
+# we still run it so the tablet shows the LIDAR_GNSS<->GNSS_IMU fallback when
+# LiDARs are faulted (the core 4-LiDAR failover scenario).
+if [ "${MULTIMODE:-0}" = "1" ] || [ -n "${ROII_PROFILE:-}" ]; then
   SUDO docker exec -d autoware bash -lc \
     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/multimode_supervisor.py --ros-args -p use_sim_time:=true > /tmp/multimode.log 2>&1"
 fi
