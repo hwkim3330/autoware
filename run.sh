@@ -28,6 +28,7 @@ case "$CMD" in
   status)  exec bash "$REPO/scripts/status.sh" ;;
   real)    exec bash "$REPO/scripts/run_real_map_sim.sh" "${2:-/root/autoware_map/sample-map-planning}" ;;
   test)    exec bash "$REPO/scripts/test_all_towns.sh" ;;
+  replay)  exec bash "$REPO/scripts/run_replay.sh" "${2:-/root/replay/recorded}" "${3:-Town04}" ;;
   drive)   DEX "python3 /root/drive_monitor.py drive" ;;
   stop)    DEX "python3 /root/drive_monitor.py stop 2>/dev/null | head -3" ;;
   gateway)

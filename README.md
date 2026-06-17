@@ -30,7 +30,9 @@ cd ~/autoware-keti
 | `./run.sh app` | 태블릿 앱 빌드+설치+USB 연결 |
 | `./run.sh test` | 전 타운 자율주행 검증 (~40분, 결과 docs/town_test_results.md) |
 | `./run.sh status` / `kill` | 프로세스 상태 / 전부 정리 |
-| `LIDARS=4 ./run.sh ...` | ROii 4라이다 실험 모드 (센싱 검증·planning은 업스트림 버그로 차단, docs 참고) |
+| `./run.sh roii low [TownXX]` | ROii 4라이다 자율주행 (front/rear G32 + L/R Pandar, ~25 km/h 검증) |
+| `./run.sh replay [bag] [town]` | ROS2 bag 리플레이 (게이트웨이+rviz, 태블릿에 재생; 루프) |
+| `./run.sh mapdaemon` | 태블릿 맵-전환 데몬 (탭으로 맵 바꾸려면 상시 실행) |
 
 **태블릿** (ROii Command, `com.keti.roii.command`): USB 연결 후 앱 실행 — DRIVE 버튼
 또는 **지도 탭 = 그 지점으로 자율주행**. 수동운전: 독의 게임패드 아이콘 → 조이스틱/기울기(TILT)
