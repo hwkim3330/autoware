@@ -71,6 +71,14 @@ seed_initialpose() {
 }
 
 boot_carla() {
+  # Reuse a healthy running CARLA on the same town (REUSE_CARLA=0 to force a
+  # fresh boot). CARLA's boot is flaky and the GPU driver degrades after ~10
+  # crash cycles, so when an instance is already serving RPC on :2000 for this
+  # town we keep it -- a stack re-launch then only touches the Autoware side.
+  if [ "${REUSE_CARLA:-1}" = "1" ] && ss -tlnp 2>/dev/null | grep -q :2000 \
+     && pgrep -f "CarlaUE4-Linux-Shipping $TOWN" >/dev/null 2>&1; then
+    echo "    CARLA already up on :2000 ($TOWN) -- reusing"; return 0
+  fi
   SUDO pkill -9 -f CarlaUE4-Linux-Shipping 2>/dev/null; sleep 4
   for attempt in 1 2 3 4 5; do
     cd "$CARLA_DIR"
@@ -222,6 +230,15 @@ SUDO docker exec autoware bash -lc \
 CTLYAML=/opt/autoware/share/autoware_launch/config/system/diagnostics/control.yaml
 SUDO docker exec autoware bash -lc \
   "sed -i '/link: \/autoware\/control\/topic_rate_check\/trajectory_follower }/d; /link: \/autoware\/control\/topic_rate_check\/control_command }/d; /link: \/autoware\/control\/performance_monitoring\/lane_departure }/d; /link: \/autoware\/control\/performance_monitoring\/control_state }/d' $CTLYAML" >/dev/null 2>&1 || true
+# Lower the NDT convergence threshold for CARLA. The CARLA LiDAR + downsampled
+# pointcloud map match marginally (observed NVTL score ~2.15-2.23 vs the 2.3
+# default), so ndt_scan_matcher SKIPS publishing its pose -> ekf_localizer logs
+# "pose is not updated" -> autonomous mode never becomes available. 1.5 gives
+# margin above the observed score while still rejecting true divergence.
+# (Param is read only at node startup -- must be set before the e2e launch.)
+NDTYAML=/opt/autoware/share/autoware_ndt_scan_matcher/config/ndt_scan_matcher.param.yaml
+SUDO docker exec autoware bash -lc \
+  "sed -i 's/converged_param_nearest_voxel_transformation_likelihood: .*/converged_param_nearest_voxel_transformation_likelihood: 1.5/' $NDTYAML" >/dev/null 2>&1 || true
 
 echo "==> [3/5] Clear stale ROS processes (stop+start -- NOT docker restart)"
 # CRITICAL: use `docker stop` + `docker start`, NOT `docker restart`. `restart`
@@ -281,6 +298,8 @@ for e2etry in 1 2 3; do
     # the fault injector FEEDS the concatenation (raw -> before_sync); the
     # health monitor watches the post-injector stream. Both precede the smoke.
     SUDO docker exec autoware bash -c 'pkill -9 -f roii_lidar_fault_injector.py; pkill -9 -f roii_lidar_health_monitor.py; exit 0' >/dev/null 2>&1
+    sleep 1   # let the kill settle so a smoke-retry doesn't double-start these
+              # (duplicated_node_checker flags dup names as a system ERROR)
     SUDO docker cp "$REPO/ros/roii_lidar_fault_injector.py" autoware:/root/roii_lidar_fault_injector.py >/dev/null 2>&1
     SUDO docker cp "$REPO/ros/roii_lidar_health_monitor.py" autoware:/root/roii_lidar_health_monitor.py >/dev/null 2>&1
     SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_fault_injector.py --ros-args -p use_sim_time:=true > /tmp/roii_injector.log 2>&1"

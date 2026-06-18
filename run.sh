@@ -30,6 +30,9 @@ case "$CMD" in
   test)    exec bash "$REPO/scripts/test_all_towns.sh" ;;
   replay)  exec bash "$REPO/scripts/run_replay.sh" "${2:-/root/replay/recorded}" "${3:-Town04}" ;;
   drive)   DEX "python3 /root/drive_monitor.py drive" ;;
+  patrol)  # continuous autonomous driving: re-drives on arrival/stuck (Ctrl-C to stop)
+    SUDO docker cp "$REPO/ros/patrol_loop.py" autoware:/root/patrol_loop.py
+    DEX "python3 -u /root/patrol_loop.py" ;;
   stop)    DEX "python3 /root/drive_monitor.py stop 2>/dev/null | head -3" ;;
   gateway)
     # restart just the ROS<->WebSocket gateway (stack stays up)
