@@ -13,8 +13,8 @@ SUDO() { echo 1 | sudo -S "$@" 2>/dev/null; }
 GS=$(pgrep -x gnome-shell | head -1)
 DISP=$(tr '\0' '\n' </proc/$GS/environ 2>/dev/null | grep '^DISPLAY=' | cut -d= -f2); : "${DISP:=:1}"
 
-echo "==> [replay] container up + GPU (stop+start, not restart)"
-SUDO docker start autoware >/dev/null 2>&1 || true; sleep 2
+echo "==> [replay] clean container (stop+start = no live-stack overlap, keeps GPU)"
+SUDO docker stop -t 5 autoware >/dev/null 2>&1; SUDO docker start autoware >/dev/null 2>&1; sleep 6
 
 echo "==> [replay] deploy gateway + map"
 for f in ros_ws_gateway.py find_spawn.py; do SUDO docker cp "$REPO/ros/$f" "autoware:/root/$f" >/dev/null 2>&1; done
