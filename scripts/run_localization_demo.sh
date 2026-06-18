@@ -345,7 +345,7 @@ SUDO docker exec autoware bash -lc \
 if [ "${CENTERPOINT:-0}" = "1" ]; then
   # delete the stale prebuilt engine ONCE (TRT-version-incompatible) -> rebuild.
   SUDO docker exec autoware bash -c 'pkill -9 -f centerpoint; rm -f /root/autoware_data/lidar_centerpoint/*.engine; exit 0' >/dev/null 2>&1
-  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 launch autoware_lidar_centerpoint lidar_centerpoint.launch.xml input/pointcloud:=/sensing/lidar/concatenated/pointcloud output/objects:=/perception/centerpoint/objects model_name:=centerpoint_tiny > /tmp/cp.log 2>&1"
+  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 launch autoware_lidar_centerpoint lidar_centerpoint.launch.xml input/pointcloud:=/sensing/lidar/concatenated/pointcloud output/objects:=/perception/centerpoint/objects model_name:=centerpoint > /tmp/cp.log 2>&1"
   echo "    CenterPoint (GPU) -> /perception/centerpoint/objects (building engine ~60s, post-smoke)"
 fi
 if [ "${YOLOX:-0}" = "1" ]; then

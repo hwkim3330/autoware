@@ -199,6 +199,13 @@ class Bridge(Node):
         from sensor_msgs.msg import PointCloud2
         self.create_subscription(PointCloud2, "/localization/util/downsample/pointcloud",
                                  self._lidar_tick, be)
+        # front-camera frames for the tablet popup (YOLOX overlay if running, else
+        # the raw camera). Throttled + downscaled + JPEG-encoded in the callback;
+        # the camera_producer() coroutine ships the latest frame at ~6 Hz.
+        self._jpg = None; self._jpg_t = 0.0
+        from sensor_msgs.msg import Image as _Img
+        for topic in ("/tensorrt_yolox/out/image", "/sensing/camera/camera0/image_rect_color"):
+            self.create_subscription(_Img, topic, self._cam_cb, be)
         # per-LiDAR liveness (ROii 4-lidar suite; in 1-lidar mode only front maps)
         self.lidar_part_t = {k: [] for k in
                              ("front", "rear", "side_left", "side_right")}
@@ -397,6 +404,34 @@ class Bridge(Node):
         with self.lock:
             self.lidar_t.append(now)
             self.lidar_t = [t for t in self.lidar_t if now - t < 3.0]
+
+    def _cam_cb(self, m):
+        # throttle ~6 Hz; downscale to ~360 px wide; JPEG-encode for the tablet.
+        now = time.monotonic()
+        if now - self._jpg_t < 0.16:
+            return
+        try:
+            import numpy as np, cv2, base64
+            h, w = m.height, m.width
+            buf = np.frombuffer(bytes(m.data), dtype=np.uint8)
+            if m.encoding in ("rgb8", "bgr8"):
+                img = buf.reshape((h, w, 3))
+                if m.encoding == "rgb8":
+                    img = img[:, :, ::-1]
+            elif m.encoding in ("bgra8", "rgba8"):
+                img = buf.reshape((h, w, 4))[:, :, :3]
+                if m.encoding == "rgba8":
+                    img = img[:, :, ::-1]
+            else:
+                return
+            tw = 360; th = max(1, int(h * tw / max(1, w)))
+            small = cv2.resize(img, (tw, th), interpolation=cv2.INTER_AREA)
+            ok, jpg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 55])
+            if ok:
+                self._jpg = base64.b64encode(jpg.tobytes()).decode("ascii")
+                self._jpg_t = now
+        except Exception:
+            pass
 
     def enqueue(self, cmd):
         # Latest intent wins: a new command REPLACES anything still queued
@@ -965,6 +1000,22 @@ async def producer():
         await asyncio.sleep(0.5)
 
 
+async def camera_producer():
+    # ship the latest front-camera JPEG to the tablet at ~6 Hz (separate from the
+    # 2 Hz state frame so the surround/HUD stay responsive).
+    last = 0.0
+    while True:
+        try:
+            jpg = BRIDGE._jpg if BRIDGE else None
+            if jpg and CLIENTS and BRIDGE._jpg_t != last:
+                last = BRIDGE._jpg_t
+                msg = json.dumps({"type": "camera", "jpg": jpg})
+                await asyncio.gather(*[c.send(msg) for c in list(CLIENTS)], return_exceptions=True)
+        except Exception as e:
+            print("cam tick error:", e)
+        await asyncio.sleep(0.16)
+
+
 def spin_ros(bridge):
     ex = MultiThreadedExecutor(num_threads=4)
     ex.add_node(bridge)
@@ -981,7 +1032,7 @@ async def main():
     print(f"  ws://<host>:{WS_PORT}{WS_PATH}   (USB: adb reverse tcp:{WS_PORT} tcp:{WS_PORT})")
     print("=" * 56)
     async with websockets.serve(handler, WS_HOST, WS_PORT):
-        await producer()
+        await asyncio.gather(producer(), camera_producer())
 
 
 if __name__ == "__main__":
