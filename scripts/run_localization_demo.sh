@@ -296,6 +296,18 @@ for e2etry in 1 2 3; do
       SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 launch autoware_lidar_centerpoint lidar_centerpoint.launch.xml input/pointcloud:=/sensing/lidar/concatenated/pointcloud output/objects:=/perception/centerpoint/objects model_name:=centerpoint_tiny > /tmp/cp.log 2>&1"
       echo "    CenterPoint (GPU) on concat cloud -> /perception/centerpoint/objects (building engine ~60s)"
     fi
+    # Front camera + YOLOX (opt-in: YOLOX=1). carla_camera_pub.py attaches an RGB
+    # camera to the ego -> /sensing/camera/camera0/image_rect_color; yolox_tiny
+    # detects 2D objects incl. PEDESTRIAN (label 7) -> .../detection/rois0.
+    # Confirmed: detects a CARLA walker at ~0.88 conf -> MORAI not needed for peds.
+    # tiny model: engine builds fast even under GPU contention (CARLA+CenterPoint).
+    if [ "${YOLOX:-0}" = "1" ]; then
+      SUDO docker cp "$REPO/ros/carla_camera_pub.py" autoware:/root/carla_camera_pub.py >/dev/null 2>&1
+      SUDO docker exec autoware bash -c 'pkill -9 -f "yolox|carla_camera_pub"; exit 0' >/dev/null 2>&1
+      SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/carla_camera_pub.py > /tmp/cam.log 2>&1"
+      SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 launch autoware_tensorrt_yolox yolox_tiny.launch.xml input/image:=/sensing/camera/camera0/image_rect_color use_decompress:=false > /tmp/yoloxt.log 2>&1"
+      echo "    YOLOX (GPU) on front camera -> /perception/object_recognition/detection/rois0 (pedestrian/car 2D detect)"
+    fi
   fi
   sleep 30
   # THE acceptance gate: can the stack actually produce a trajectory? Component

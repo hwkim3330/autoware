@@ -32,6 +32,7 @@ cd ~/autoware-keti
 | `./run.sh status` / `kill` | 프로세스 상태 / 전부 정리 |
 | `./run.sh roii low [TownXX]` | ROii 4라이다 자율주행 (front/rear G32 + L/R Pandar, ~25 km/h 검증) |
 | `CENTERPOINT=1 ./run.sh roii low [TownXX]` | 4라이다 + GPU CenterPoint 객체검출 (concat→/perception/centerpoint/objects) |
+| `YOLOX=1 ./run.sh roii low [TownXX]` | 전방 카메라 + GPU YOLOX 보행자/차량 2D 검출 (→detection/rois0; 보행자 label 7 ~0.88) |
 | `./run.sh replay [bag] [town]` | ROS2 bag 리플레이 (게이트웨이+rviz, 태블릿에 재생; 루프) |
 | `./run.sh mapdaemon` | 태블릿 맵-전환 데몬 (탭으로 맵 바꾸려면 상시 실행) |
 
