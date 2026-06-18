@@ -11,9 +11,11 @@ try: w.wait_for_tick(3.0)
 except Exception: pass
 ego=next((a for a in w.get_actors().filter("vehicle.*") if a.attributes.get("role_name")=="ego_vehicle"),None)
 if ego is None: print("NO EGO",flush=True); raise SystemExit
-W,H=960,540
+W,H=640,360
 bp=w.get_blueprint_library().find("sensor.camera.rgb")
-bp.set_attribute("image_size_x",str(W)); bp.set_attribute("image_size_y",str(H)); bp.set_attribute("fov","90"); bp.set_attribute("sensor_tick","0.1")
+# 640x360 @5Hz: lighter on CARLA's render tick so the 4-LiDAR scan rate stays
+# high (960x540@10Hz roughly halved the concat rate -> shaky NDT).
+bp.set_attribute("image_size_x",str(W)); bp.set_attribute("image_size_y",str(H)); bp.set_attribute("fov","90"); bp.set_attribute("sensor_tick","0.2")
 cam=w.spawn_actor(bp, carla.Transform(carla.Location(x=1.5,z=1.6)), attach_to=ego)
 print("camera attached id",cam.id,flush=True)
 ci=CameraInfo(); ci.width=W; ci.height=H; ci.header.frame_id="camera0/camera_link"

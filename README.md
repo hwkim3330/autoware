@@ -96,16 +96,24 @@ app/, webapp/, desktop/, launch/   earlier gateway/app/launcher experiments (kep
 
 ## Tablet app
 
-Live app: `/home/kim/roii_autoware_monitor` — Tesla Model 3/Y layout: left
-panel (PRND strip, big speed, AUTOPILOT pill, 3D ROii), full-bleed dark nav map
-(grey lane network, Tesla-blue planned route, red destination pin; **tap the map
-to auto-drive there**), bottom icon dock (ROii architecture screen, manual
-joystick, Drive / Stop / Clear).
+Live app: `/home/kim/roii_command` (`com.keti.roii.command`) — Tesla-style
+light/white dashboard (design language from github.com/hwkim3330/tabsla):
+- **left**: a live 3D autopilot surround (Three.js WebView) — the **ROii 3D
+  model** (roii.glb, served over a localhost HTTP server) on a daytime road with
+  the planned-path ribbon and CenterPoint objects as class-coloured 3D models
+  (car=blue, truck=amber; pedestrians are NOT drawn — CenterPoint false-positives
+  guardrails as people). HUD: PRND, big thin speed, AUTOPILOT/READY/MANUAL pill.
+- **right**: light nav map — white roads, Tesla-blue route, **tap to auto-drive**.
+- **MANUAL** mode: steer joystick / tilt-steer + ACCEL/REVERSE pedals (teleop).
+- **camera popup**: live front-camera JPEG (with the YOLOX overlay) streamed from
+  the gateway — only when `YOLOX=1` is running.
+- **bottom bar**: Drive / Stop / Clear / Emergency + live ROUTE / TRAJ / NDT / OBJ.
 
 ```bash
-cd /home/kim/roii_autoware_monitor
+cd /home/kim/roii_command
+export PATH="$PATH:/home/kim/flutter/bin"
 flutter build apk --release && adb install -r build/app/outputs/flutter-apk/app-release.apk
-adb reverse tcp:8765 tcp:8765
+adb reverse tcp:8765 tcp:8765       # or set ws://<PC-IP>:8765/ws for Wi-Fi
 ```
 
 Older versions archived in `backup/app-versions/` (v1 = original PLEOS
