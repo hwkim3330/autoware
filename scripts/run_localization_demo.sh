@@ -285,6 +285,17 @@ for e2etry in 1 2 3; do
     SUDO docker cp "$REPO/ros/roii_lidar_health_monitor.py" autoware:/root/roii_lidar_health_monitor.py >/dev/null 2>&1
     SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_fault_injector.py --ros-args -p use_sim_time:=true > /tmp/roii_injector.log 2>&1"
     SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_health_monitor.py --ros-args -p use_sim_time:=true > /tmp/roii_monitor.log 2>&1"
+    # GPU LiDAR object detection (opt-in: CENTERPOINT=1). Runs CenterPoint on the
+    # 4-lidar concat cloud -> /perception/centerpoint/objects (DetectedObjects)
+    # for rviz/app viz. Coexists with the stub (which keeps AUTO available). The
+    # stale prebuilt .engine is TRT-version-incompatible, so remove it -> rebuild
+    # from ONNX with this TRT (~60s). Needs CUDA in the container (stop+start, not
+    # restart -- see [3/5]).
+    if [ "${CENTERPOINT:-0}" = "1" ]; then
+      SUDO docker exec autoware bash -c 'pkill -9 -f centerpoint; rm -f /root/autoware_data/lidar_centerpoint/*.engine; exit 0' >/dev/null 2>&1
+      SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 launch autoware_lidar_centerpoint lidar_centerpoint.launch.xml input/pointcloud:=/sensing/lidar/concatenated/pointcloud output/objects:=/perception/centerpoint/objects model_name:=centerpoint_tiny > /tmp/cp.log 2>&1"
+      echo "    CenterPoint (GPU) on concat cloud -> /perception/centerpoint/objects (building engine ~60s)"
+    fi
   fi
   sleep 30
   # THE acceptance gate: can the stack actually produce a trajectory? Component
