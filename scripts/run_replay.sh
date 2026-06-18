@@ -29,9 +29,11 @@ echo "==> [replay] gateway (use_sim_time, reads the bag topics)"
 SUDO docker exec -d autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export LANELET_OSM=/root/autoware_map/$TOWN/lanelet2_map.osm; export REPLAY=1; source /opt/autoware/setup.bash; python3 -u /root/ros_ws_gateway.py > /tmp/gw.log 2>&1"
 
-echo "==> [replay] play bag (looped, --clock drives sim time): $BAG"
+echo "==> [replay] play bag (robust while-loop -- ros2 --loop alone can stop): $BAG"
+# wrap in while-true: ros2 bag play --loop sometimes plays once then exits;
+# the loop guarantees the replay keeps running ("계속 돌기").
 SUDO docker exec -d autoware bash -lc \
-  "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 bag play "$BAG" --loop --rate 1.0 > /tmp/replay.log 2>&1"
+  "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; while true; do ros2 bag play '$BAG' --rate 1.0 >> /tmp/replay.log 2>&1; sleep 1; done"
 
 echo "==> [replay] rviz on the monitor"
 DISPLAY=$DISP xhost +local: >/dev/null 2>&1 || true
