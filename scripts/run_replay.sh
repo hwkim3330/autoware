@@ -6,7 +6,7 @@
 # No CARLA / no live Autoware -- just the bag publishing + the gateway reading it.
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-BAG="${1:-/root/replay/recorded}"          # path INSIDE the container
+BAG="${1:-/root/replay/full_drive}"          # path INSIDE the container
 TOWN="${2:-Town04}"
 SUDO() { echo 1 | sudo -S "$@" 2>/dev/null; }
 
@@ -33,7 +33,7 @@ echo "==> [replay] play bag (robust while-loop -- ros2 --loop alone can stop): $
 # wrap in while-true: ros2 bag play --loop sometimes plays once then exits;
 # the loop guarantees the replay keeps running ("계속 돌기").
 SUDO docker exec -d autoware bash -lc \
-  "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; while true; do ros2 bag play '$BAG' --rate 1.0 >> /tmp/replay.log 2>&1; sleep 1; done"
+  "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; QOS=''; [ -f /root/replay_qos.yaml ] && QOS='--qos-profile-overrides-path /root/replay_qos.yaml'; while true; do ros2 bag play '$BAG' --rate 1.0 \$QOS >> /tmp/replay.log 2>&1; sleep 1; done"
 
 echo "==> [replay] rviz on the monitor"
 DISPLAY=$DISP xhost +local: >/dev/null 2>&1 || true
