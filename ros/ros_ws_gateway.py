@@ -206,6 +206,10 @@ class Bridge(Node):
         from sensor_msgs.msg import Image as _Img
         for topic in ("/tensorrt_yolox/out/image", "/sensing/camera/camera0/image_rect_color"):
             self.create_subscription(_Img, topic, self._cam_cb, be)
+        # real Autoware 3rd-person view (rviz viewport captured by
+        # roii_view_stream.py) -> streamed to the tablet as {type:"view"}.
+        self._view = None; self._view_t = 0.0
+        self.create_subscription(_Img, "/roii/view/image", self._view_cb, be)
         # per-LiDAR liveness (ROii 4-lidar suite; in 1-lidar mode only front maps)
         self.lidar_part_t = {k: [] for k in
                              ("front", "rear", "side_left", "side_right")}
@@ -430,6 +434,22 @@ class Bridge(Node):
             if ok:
                 self._jpg = base64.b64encode(jpg.tobytes()).decode("ascii")
                 self._jpg_t = now
+        except Exception:
+            pass
+
+    def _view_cb(self, m):
+        # rviz 3rd-person viewport (bgr8) -> JPEG for the tablet. ~8 Hz already.
+        now = time.monotonic()
+        if now - self._view_t < 0.11:
+            return
+        try:
+            import numpy as np, cv2, base64
+            h, w = m.height, m.width
+            img = np.frombuffer(bytes(m.data), dtype=np.uint8).reshape((h, w, 3))
+            ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 62])
+            if ok:
+                self._view = base64.b64encode(jpg.tobytes()).decode("ascii")
+                self._view_t = now
         except Exception:
             pass
 
@@ -1016,6 +1036,21 @@ async def camera_producer():
         await asyncio.sleep(0.16)
 
 
+async def view_producer():
+    # ship the rviz 3rd-person view to the tablet at ~8 Hz.
+    last = 0.0
+    while True:
+        try:
+            v = BRIDGE._view if BRIDGE else None
+            if v and CLIENTS and BRIDGE._view_t != last:
+                last = BRIDGE._view_t
+                msg = json.dumps({"type": "view", "jpg": v})
+                await asyncio.gather(*[c.send(msg) for c in list(CLIENTS)], return_exceptions=True)
+        except Exception as e:
+            print("view tick error:", e)
+        await asyncio.sleep(0.12)
+
+
 def spin_ros(bridge):
     ex = MultiThreadedExecutor(num_threads=4)
     ex.add_node(bridge)
@@ -1032,7 +1067,7 @@ async def main():
     print(f"  ws://<host>:{WS_PORT}{WS_PATH}   (USB: adb reverse tcp:{WS_PORT} tcp:{WS_PORT})")
     print("=" * 56)
     async with websockets.serve(handler, WS_HOST, WS_PORT):
-        await asyncio.gather(producer(), camera_producer())
+        await asyncio.gather(producer(), camera_producer(), view_producer())
 
 
 if __name__ == "__main__":
