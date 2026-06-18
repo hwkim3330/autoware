@@ -236,9 +236,10 @@ SUDO docker exec autoware bash -lc \
 # "pose is not updated" -> autonomous mode never becomes available. 1.5 gives
 # margin above the observed score while still rejecting true divergence.
 # (Param is read only at node startup -- must be set before the e2e launch.)
-NDTYAML=/opt/autoware/share/autoware_ndt_scan_matcher/config/ndt_scan_matcher.param.yaml
+# NOTE: the launch uses the autoware_launch *override*, not the package default,
+# so edit every ndt_scan_matcher.param.yaml under /opt/autoware/share.
 SUDO docker exec autoware bash -lc \
-  "sed -i 's/converged_param_nearest_voxel_transformation_likelihood: .*/converged_param_nearest_voxel_transformation_likelihood: 1.5/' $NDTYAML" >/dev/null 2>&1 || true
+  "for f in \$(find /opt/autoware/share -name 'ndt_scan_matcher.param.yaml' 2>/dev/null); do sed -i 's/converged_param_nearest_voxel_transformation_likelihood: .*/converged_param_nearest_voxel_transformation_likelihood: 2.0/' \$f; done" >/dev/null 2>&1 || true
 
 echo "==> [3/5] Clear stale ROS processes (stop+start -- NOT docker restart)"
 # CRITICAL: use `docker stop` + `docker start`, NOT `docker restart`. `restart`
@@ -304,29 +305,10 @@ for e2etry in 1 2 3; do
     SUDO docker cp "$REPO/ros/roii_lidar_health_monitor.py" autoware:/root/roii_lidar_health_monitor.py >/dev/null 2>&1
     SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_fault_injector.py --ros-args -p use_sim_time:=true > /tmp/roii_injector.log 2>&1"
     SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_health_monitor.py --ros-args -p use_sim_time:=true > /tmp/roii_monitor.log 2>&1"
-    # GPU LiDAR object detection (opt-in: CENTERPOINT=1). Runs CenterPoint on the
-    # 4-lidar concat cloud -> /perception/centerpoint/objects (DetectedObjects)
-    # for rviz/app viz. Coexists with the stub (which keeps AUTO available). The
-    # stale prebuilt .engine is TRT-version-incompatible, so remove it -> rebuild
-    # from ONNX with this TRT (~60s). Needs CUDA in the container (stop+start, not
-    # restart -- see [3/5]).
-    if [ "${CENTERPOINT:-0}" = "1" ]; then
-      SUDO docker exec autoware bash -c 'pkill -9 -f centerpoint; rm -f /root/autoware_data/lidar_centerpoint/*.engine; exit 0' >/dev/null 2>&1
-      SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 launch autoware_lidar_centerpoint lidar_centerpoint.launch.xml input/pointcloud:=/sensing/lidar/concatenated/pointcloud output/objects:=/perception/centerpoint/objects model_name:=centerpoint_tiny > /tmp/cp.log 2>&1"
-      echo "    CenterPoint (GPU) on concat cloud -> /perception/centerpoint/objects (building engine ~60s)"
-    fi
-    # Front camera + YOLOX (opt-in: YOLOX=1). carla_camera_pub.py attaches an RGB
-    # camera to the ego -> /sensing/camera/camera0/image_rect_color; yolox_tiny
-    # detects 2D objects incl. PEDESTRIAN (label 7) -> .../detection/rois0.
-    # Confirmed: detects a CARLA walker at ~0.88 conf -> MORAI not needed for peds.
-    # tiny model: engine builds fast even under GPU contention (CARLA+CenterPoint).
-    if [ "${YOLOX:-0}" = "1" ]; then
-      SUDO docker cp "$REPO/ros/carla_camera_pub.py" autoware:/root/carla_camera_pub.py >/dev/null 2>&1
-      SUDO docker exec autoware bash -c 'pkill -9 -f "yolox|carla_camera_pub"; exit 0' >/dev/null 2>&1
-      SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/carla_camera_pub.py > /tmp/cam.log 2>&1"
-      SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 launch autoware_tensorrt_yolox yolox_tiny.launch.xml input/image:=/sensing/camera/camera0/image_rect_color use_decompress:=false > /tmp/yoloxt.log 2>&1"
-      echo "    YOLOX (GPU) on front camera -> /perception/object_recognition/detection/rois0 (pedestrian/car 2D detect)"
-    fi
+    # NOTE: GPU perception (CenterPoint / YOLOX) is launched AFTER the smoke test
+    # passes (see below), NOT here -- building the TensorRT engine (~60s) during
+    # the localization-convergence window starves NDT and makes the smoke fail
+    # ("no odometry"). Launching it post-smoke keeps bring-up reliable.
   fi
   sleep 30
   # THE acceptance gate: can the stack actually produce a trajectory? Component
@@ -354,6 +336,25 @@ SUDO docker exec autoware bash -lc \
    echo -n 'NDT downsample in : '; timeout 8 ros2 topic hz /localization/util/downsample/pointcloud 2>/dev/null|grep -m1 average; \
    echo -n 'kinematic_state   : '; timeout 8 ros2 topic hz /localization/kinematic_state 2>/dev/null|grep -m1 average; \
    echo -n 'TF map->base_link : '; timeout 8 ros2 run tf2_ros tf2_echo map base_link 2>/dev/null|grep -m1 Translation"
+
+# GPU perception AFTER localization is up (so the TensorRT engine build doesn't
+# starve NDT during convergence). CenterPoint (CENTERPOINT=1) detects 3D objects
+# on the 4-lidar concat -> /perception/centerpoint/objects (cars + pedestrians,
+# streamed to the tablet's Tesla surround view). YOLOX (YOLOX=1) adds front-
+# camera 2D detection. Both coexist with the perception stub (keeps AUTO avail).
+if [ "${CENTERPOINT:-0}" = "1" ]; then
+  # delete the stale prebuilt engine ONCE (TRT-version-incompatible) -> rebuild.
+  SUDO docker exec autoware bash -c 'pkill -9 -f centerpoint; rm -f /root/autoware_data/lidar_centerpoint/*.engine; exit 0' >/dev/null 2>&1
+  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 launch autoware_lidar_centerpoint lidar_centerpoint.launch.xml input/pointcloud:=/sensing/lidar/concatenated/pointcloud output/objects:=/perception/centerpoint/objects model_name:=centerpoint_tiny > /tmp/cp.log 2>&1"
+  echo "    CenterPoint (GPU) -> /perception/centerpoint/objects (building engine ~60s, post-smoke)"
+fi
+if [ "${YOLOX:-0}" = "1" ]; then
+  SUDO docker cp "$REPO/ros/carla_camera_pub.py" autoware:/root/carla_camera_pub.py >/dev/null 2>&1
+  SUDO docker exec autoware bash -c 'pkill -9 -f "yolox|carla_camera_pub"; exit 0' >/dev/null 2>&1
+  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/carla_camera_pub.py > /tmp/cam.log 2>&1"
+  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 launch autoware_tensorrt_yolox yolox_tiny.launch.xml input/image:=/sensing/camera/camera0/image_rect_color use_decompress:=false > /tmp/yoloxt.log 2>&1"
+  echo "    YOLOX (GPU) on front camera -> /perception/object_recognition/detection/rois0"
+fi
 
 echo "==> Start ROS->WebSocket gateway (tablet app) + rviz on the monitor"
 # dedupe helpers in a SEPARATE exec: a pkill inside the same shell string as the
