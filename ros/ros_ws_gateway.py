@@ -206,6 +206,14 @@ class Bridge(Node):
             self.create_subscription(
                 PointCloud2, f"/sensing/lidar/{key}/pointcloud_before_sync",
                 (lambda k: lambda m: self._part_tick(k))(key), be)
+        # 3D detected objects (GPU CenterPoint) for the Tesla-style surround view.
+        # base_link frame -> transformed to map in frame() via the ego pose.
+        try:
+            from autoware_perception_msgs.msg import DetectedObjects
+            self.create_subscription(DetectedObjects, "/perception/centerpoint/objects",
+                                     lambda m: self._set("objs", m), be)
+        except Exception:
+            pass
         cbg = ReentrantCallbackGroup()
         self.cli_clear = self.create_client(ClearRoute, "/api/routing/clear_route", callback_group=cbg)
         self.cli_route = self.create_client(SetRoutePoints, "/api/routing/set_route_points", callback_group=cbg)
@@ -784,6 +792,26 @@ class Bridge(Node):
                    "z": round(o.position.z, 2), "yawDeg": round(math.degrees(yaw), 1),
                    "speedKmh": round(math.hypot(v.x, v.y) * 3.6, 1)}
             converged = True
+        # surround objects (CenterPoint, base_link) -> world coords for the map.
+        # Tesla-style: cars/peds drawn around the ego, oriented by heading.
+        objects = []
+        if converged and fresh("objs", 1.0):
+            ca, sa = math.cos(yaw), math.sin(yaw)
+            for ob in s["objs"][0].objects[:40]:
+                p = ob.kinematics.pose_with_covariance.pose
+                lx, ly = p.position.x, p.position.y
+                wx = ego["x"] + lx * ca - ly * sa
+                wy = ego["y"] + lx * sa + ly * ca
+                oq = p.orientation
+                oyaw = math.atan2(2 * (oq.w * oq.z + oq.x * oq.y),
+                                  1 - 2 * (oq.y * oq.y + oq.z * oq.z))
+                cls = (max(ob.classification, key=lambda c: c.probability).label
+                       if ob.classification else 0)
+                d = ob.shape.dimensions
+                objects.append({"x": round(wx, 1), "y": round(wy, 1),
+                                "yaw": round(math.degrees(yaw + oyaw)),
+                                "cls": int(cls),
+                                "sx": round(max(d.x, 0.5), 1), "sy": round(max(d.y, 0.5), 1)})
         loc_init = s["loc"][0].state if "loc" in s else 0
         op = s["op"][0].mode if "op" in s else 0
         op_avail = bool(s["op"][0].is_autonomous_mode_available) if "op" in s else False
@@ -847,6 +875,7 @@ class Bridge(Node):
                         "plannedKmh": planned_kmh},
             "roii": (json.loads(s["roii_health"][0].data)
                      if "roii_health" in s and fresh("roii_health", 3) else None),
+            "objects": objects,
             "sensors": sensors, "parts": parts, "faults": faults,
             "sensorSuite": {"lidars": len(ROII_LIDARS), "radars": len(ROII_RADARS),
                             "simulated": 4, "cameras": 0},
