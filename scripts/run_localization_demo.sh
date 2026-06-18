@@ -345,7 +345,7 @@ SUDO docker exec autoware bash -lc \
 if [ "${CENTERPOINT:-0}" = "1" ]; then
   # delete the stale prebuilt engine ONCE (TRT-version-incompatible) -> rebuild.
   SUDO docker exec autoware bash -c 'pkill -9 -f centerpoint; rm -f /root/autoware_data/lidar_centerpoint/*.engine; exit 0' >/dev/null 2>&1
-  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 launch autoware_lidar_centerpoint lidar_centerpoint.launch.xml input/pointcloud:=/sensing/lidar/concatenated/pointcloud output/objects:=/perception/centerpoint/objects model_name:=centerpoint > /tmp/cp.log 2>&1"
+  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 launch autoware_lidar_centerpoint lidar_centerpoint.launch.xml input/pointcloud:=/sensing/lidar/concatenated/pointcloud output/objects:=/perception/centerpoint/objects model_name:=centerpoint_tiny > /tmp/cp.log 2>&1"
   echo "    CenterPoint (GPU) -> /perception/centerpoint/objects (building engine ~60s, post-smoke)"
 fi
 if [ "${YOLOX:-0}" = "1" ]; then
@@ -404,14 +404,6 @@ else
    source /opt/autoware/setup.bash; \
    rviz2 -d /root/autoware_no_camera.rviz > /tmp/rviz.log 2>&1"
 fi
-# Stream the rviz 3rd-person viewport to the tablet (the "real Autoware view").
-# Needs xdotool (window geometry) + ffmpeg (x11grab, already present). Give rviz
-# a few seconds to open its window first.
-SUDO docker exec autoware bash -lc "command -v xdotool >/dev/null || (apt-get update >/dev/null 2>&1; apt-get install -y xdotool >/dev/null 2>&1)" >/dev/null 2>&1
-SUDO docker cp "$REPO/ros/roii_view_stream.py" autoware:/root/roii_view_stream.py >/dev/null 2>&1
-SUDO docker exec autoware bash -c 'pkill -9 -f roii_view_stream.py; exit 0' >/dev/null 2>&1
-( sleep 8; SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export DISPLAY=$DISP; source /opt/autoware/setup.bash; python3 -u /root/roii_view_stream.py > /tmp/view.log 2>&1" ) &
-echo "    rviz 3rd-person view -> tablet (/roii/view/image -> ws {type:view})"
 fi
 echo "Done. Gateway: ws://<host>:8765/ws (adb reverse for USB). rviz on the monitor (unless RVIZ=0)."
 echo "CARLA log: /tmp/carla.log   Autoware log: docker exec autoware tail -f /tmp/e2e.log"
