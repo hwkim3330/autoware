@@ -34,8 +34,8 @@ async def main():
                 m = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
             except Exception:
                 continue
-            if m.get("type") == "lanes":
-                continue
+            if m.get("type") in ("lanes", "camera", "view"):
+                continue   # not a state frame
             e = m.get("ego", {}); r = m.get("route", {}); op = m.get("operationMode", {})
             spd = e.get("speedKmh", 0.0); rstate = r.get("state"); now = time.time()
             nobj = len(m.get("objects", []))
