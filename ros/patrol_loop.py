@@ -18,7 +18,6 @@ GRACE_S = 8.0       # after issuing drive, don't re-issue for this long
 
 async def main():
     trips = 0
-    stuck_streak = 0
     async with websockets.connect(URL) as ws:
         async def drive():
             nonlocal trips, last_cmd
@@ -26,15 +25,6 @@ async def main():
             await ws.send(json.dumps({"cmd": "drive"}))
             last_cmd = time.time()
             print(f"[patrol] trip #{trips} -> drive", flush=True)
-        async def respawn():
-            # Some arrival points in CARLA leave the ego with a marginal
-            # pose-vs-trajectory deviation -> engage condition oscillates and the
-            # controller holds the brake. Teleport back to the validated spawn
-            # (gateway picks the NDT-reliable point) and drive from there.
-            nonlocal last_cmd
-            await ws.send(json.dumps({"cmd": "respawn"}))
-            last_cmd = time.time() + 6.0   # respawn takes longer; extend grace
-            print("[patrol] respawn -> validated spawn", flush=True)
         last_cmd = 0.0
         last_move = time.time()
         await drive()
@@ -62,16 +52,13 @@ async def main():
             stuck = (now - last_move) > STUCK_S
             if arrived or unset or stuck:
                 why = "ARRIVED" if arrived else ("UNSET" if unset else "STUCK")
-                stuck_streak = stuck_streak + 1 if stuck else 0
                 last_move = now
-                # 2 consecutive stuck cycles -> the spot is bad; respawn to the
-                # validated point instead of re-driving from a stuck pose.
-                if stuck_streak >= 2:
-                    stuck_streak = 0
-                    await respawn()
-                else:
-                    print(f"[patrol] re-drive ({why})", flush=True)
-                    await drive()
+                # Always re-drive (pick a fresh goal ahead). NOT respawn: re-seeding
+                # the pose makes ndt_scan_matcher transiently drop lock in CARLA.
+                # A stuck arrival point usually clears when a new forward goal is
+                # chosen, so just keep issuing drive.
+                print(f"[patrol] re-drive ({why})", flush=True)
+                await drive()
 
 
 asyncio.run(main())
