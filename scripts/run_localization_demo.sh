@@ -302,6 +302,13 @@ for e2etry in 1 2 3; do
     SUDO docker exec autoware bash -c 'pkill -9 -f perception_stub.py; exit 0' >/dev/null 2>&1
     SUDO docker cp "$REPO/ros/perception_stub.py" autoware:/root/perception_stub.py >/dev/null 2>&1
     SUDO docker exec -d autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1"
+  else
+    # FULL perception: feed an empty traffic-light signal so the TL topic monitor
+    # is OK (no TL camera in CARLA) -> otherwise it gates AUTONOMOUS availability.
+    # THIS is what lets perception:=true actually drive (verified 0->11 km/h).
+    SUDO docker exec autoware bash -c 'pkill -9 -f traffic_light_stub.py; exit 0' >/dev/null 2>&1
+    SUDO docker cp "$REPO/ros/traffic_light_stub.py" autoware:/root/traffic_light_stub.py >/dev/null 2>&1
+    SUDO docker exec -d autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      python3 -u /root/traffic_light_stub.py --ros-args -p use_sim_time:=true > /tmp/tlstub.log 2>&1"
   fi
   if [ -n "${ROII_PROFILE:-}" ]; then
     # the fault injector FEEDS the concatenation (raw -> before_sync); the
