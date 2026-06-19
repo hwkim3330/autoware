@@ -274,8 +274,16 @@ for e2etry in 1 2 3; do
   # PERCEPTION=1 -> bring up the FULL Autoware perception (ground-seg -> CenterPoint
   # -> tracking -> prediction) feeding planning, instead of the empty stub. lidar
   # mode (no camera dependency); camera-lidar fusion is a further step.
+  # FUSION=1 implies full perception with camera-lidar fusion (1 front camera).
+  [ "${FUSION:-0}" = "1" ] && PERCEPTION=1
   PERC="false"
-  [ "${PERCEPTION:-0}" = "1" ] && PERC="true perception_mode:=lidar lidar_detection_model:=centerpoint"
+  if [ "${PERCEPTION:-0}" = "1" ]; then
+    if [ "${FUSION:-0}" = "1" ]; then
+      PERC="true perception_mode:=camera_lidar_fusion lidar_detection_model:=centerpoint image_number:=1 image_topic_name:=image_rect_color"
+    else
+      PERC="true perception_mode:=lidar lidar_detection_model:=centerpoint"
+    fi
+  fi
   SUDO docker exec -d autoware bash -lc \
     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash && \
      ros2 launch autoware_launch e2e_simulator.launch.xml \
@@ -309,6 +317,16 @@ for e2etry in 1 2 3; do
     SUDO docker exec autoware bash -c 'pkill -9 -f traffic_light_stub.py; exit 0' >/dev/null 2>&1
     SUDO docker cp "$REPO/ros/traffic_light_stub.py" autoware:/root/traffic_light_stub.py >/dev/null 2>&1
     SUDO docker exec -d autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      python3 -u /root/traffic_light_stub.py --ros-args -p use_sim_time:=true > /tmp/tlstub.log 2>&1"
+    # FUSION: feed the front camera (/sensing/camera/camera0) + a static
+    # base_link->camera0 TF so perception's camera_lidar_fusion can project
+    # clusters onto the YOLOX rois (perception runs its own yolox + roi fusion).
+    if [ "${FUSION:-0}" = "1" ]; then
+      SUDO docker cp "$REPO/ros/carla_camera_pub.py" autoware:/root/carla_camera_pub.py >/dev/null 2>&1
+      SUDO docker exec autoware bash -c 'pkill -9 -f "carla_camera_pub|static_transform_publisher.*camera0"; exit 0' >/dev/null 2>&1
+      SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 run tf2_ros static_transform_publisher --x 1.5 --y 0 --z 1.6 --qx -0.5 --qy 0.5 --qz -0.5 --qw 0.5 --frame-id base_link --child-frame-id camera0/camera_link > /tmp/camtf.log 2>&1"
+      SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/carla_camera_pub.py --ros-args -p use_sim_time:=true > /tmp/cam.log 2>&1"
+      echo "    FUSION: front camera /sensing/camera/camera0 + TF -> camera_lidar_fusion"
+    fi
   fi
   if [ -n "${ROII_PROFILE:-}" ]; then
     # the fault injector FEEDS the concatenation (raw -> before_sync); the
