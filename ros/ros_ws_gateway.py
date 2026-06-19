@@ -213,12 +213,17 @@ class Bridge(Node):
             self.create_subscription(
                 PointCloud2, f"/sensing/lidar/{key}/pointcloud_before_sync",
                 (lambda k: lambda m: self._part_tick(k))(key), be)
-        # 3D detected objects (GPU CenterPoint) for the Tesla-style surround view.
-        # base_link frame -> transformed to map in frame() via the ego pose.
+        # Detected objects for the tablet map. Two sources, whichever is live:
+        #  - full perception (PERCEPTION=1): /perception/object_recognition/objects
+        #    = tracked+predicted PredictedObjects (map frame, classified).
+        #  - opt-in CenterPoint (CENTERPOINT=1): /perception/centerpoint/objects
+        #    = DetectedObjects in base_link.
         try:
             from autoware_perception_msgs.msg import DetectedObjects
             self.create_subscription(DetectedObjects, "/perception/centerpoint/objects",
                                      lambda m: self._set("objs", m), be)
+            self.create_subscription(PredictedObjects, "/perception/object_recognition/objects",
+                                     lambda m: self._set("pobjs", m), be)
         except Exception:
             pass
         cbg = ReentrantCallbackGroup()
@@ -827,10 +832,23 @@ class Bridge(Node):
                    "z": round(o.position.z, 2), "yawDeg": round(math.degrees(yaw), 1),
                    "speedKmh": round(math.hypot(v.x, v.y) * 3.6, 1)}
             converged = True
-        # surround objects (CenterPoint, base_link) -> world coords for the map.
-        # Tesla-style: cars/peds drawn around the ego, oriented by heading.
+        # detected objects for the map. Prefer full-perception tracked objects
+        # (PredictedObjects, already in map frame); fall back to CenterPoint
+        # (DetectedObjects in base_link -> transform via the ego pose).
         objects = []
-        if converged and fresh("objs", 1.0):
+        if fresh("pobjs", 1.5):
+            for ob in s["pobjs"][0].objects[:40]:
+                p = ob.kinematics.initial_pose_with_covariance.pose
+                oq = p.orientation
+                oyaw = math.atan2(2 * (oq.w * oq.z + oq.x * oq.y),
+                                  1 - 2 * (oq.y * oq.y + oq.z * oq.z))
+                cls = (max(ob.classification, key=lambda c: c.probability).label
+                       if ob.classification else 0)
+                d = ob.shape.dimensions
+                objects.append({"x": round(p.position.x, 1), "y": round(p.position.y, 1),
+                                "yaw": round(math.degrees(oyaw)), "cls": int(cls),
+                                "sx": round(max(d.x, 0.5), 1), "sy": round(max(d.y, 0.5), 1)})
+        elif converged and fresh("objs", 1.0):
             ca, sa = math.cos(yaw), math.sin(yaw)
             for ob in s["objs"][0].objects[:40]:
                 p = ob.kinematics.pose_with_covariance.pose

@@ -271,12 +271,17 @@ for e2etry in 1 2 3; do
     boot_carla || { echo "CARLA failed to boot"; exit 1; }
   fi
   echo "==> [4/5] Launch Autoware e2e (attempt $e2etry)"
+  # PERCEPTION=1 -> bring up the FULL Autoware perception (ground-seg -> CenterPoint
+  # -> tracking -> prediction) feeding planning, instead of the empty stub. lidar
+  # mode (no camera dependency); camera-lidar fusion is a further step.
+  PERC="false"
+  [ "${PERCEPTION:-0}" = "1" ] && PERC="true perception_mode:=lidar lidar_detection_model:=centerpoint"
   SUDO docker exec -d autoware bash -lc \
     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash && \
      ros2 launch autoware_launch e2e_simulator.launch.xml \
      map_path:=/root/autoware_map/$TOWN vehicle_model:=sample_vehicle \
      sensor_model:=carla_sensor_kit simulator_type:=carla carla_map:=$TOWN \
-     timeout:=300 perception:=false rviz:=false launch_system_monitor:=false \
+     timeout:=300 perception:=$PERC rviz:=false launch_system_monitor:=false \
      > /tmp/e2e.log 2>&1"
   sleep 60
   DIED=$(SUDO docker exec autoware bash -lc "grep -ac 'process has died' /tmp/e2e.log" 2>/dev/null | tr -dc 0-9)
@@ -292,9 +297,12 @@ for e2etry in 1 2 3; do
   # behavior_path needs the perception stub (empty objects + clear occupancy
   # grid) to produce ANY trajectory -- it must run BEFORE the smoke test.
   # (Starting it only after the gate made the gate fail unconditionally.)
-  SUDO docker exec autoware bash -c 'pkill -9 -f perception_stub.py; exit 0' >/dev/null 2>&1
-  SUDO docker cp "$REPO/ros/perception_stub.py" autoware:/root/perception_stub.py >/dev/null 2>&1
-  SUDO docker exec -d autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1"
+  # With PERCEPTION=1 the REAL perception provides objects/occupancy -> no stub.
+  if [ "${PERCEPTION:-0}" != "1" ]; then
+    SUDO docker exec autoware bash -c 'pkill -9 -f perception_stub.py; exit 0' >/dev/null 2>&1
+    SUDO docker cp "$REPO/ros/perception_stub.py" autoware:/root/perception_stub.py >/dev/null 2>&1
+    SUDO docker exec -d autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1"
+  fi
   if [ -n "${ROII_PROFILE:-}" ]; then
     # the fault injector FEEDS the concatenation (raw -> before_sync); the
     # health monitor watches the post-injector stream. Both precede the smoke.
