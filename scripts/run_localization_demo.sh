@@ -359,6 +359,19 @@ for e2etry in 1 2 3; do
   sleep 5
 done
 
+# Post-smoke: dedupe the ROii helper nodes. Smoke-retries (multiple e2e attempts)
+# double-start the fault_injector/health_monitor -> duplicated_node_checker errors
+# -> it gates AUTONOMOUS availability (car won't engage). Kill all + restart ONE
+# each + bounce the ros2 daemon so stale DDS participants are dropped.
+if [ -n "${ROII_PROFILE:-}" ]; then
+  SUDO docker exec autoware bash -c 'pkill -9 -f "roii_lidar_health_monitor|roii_lidar_fault_injector"; exit 0' >/dev/null 2>&1
+  sleep 3
+  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_fault_injector.py --ros-args -p use_sim_time:=true > /tmp/roii_injector.log 2>&1"
+  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_health_monitor.py --ros-args -p use_sim_time:=true > /tmp/roii_monitor.log 2>&1"
+  SUDO docker exec autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 daemon stop >/dev/null 2>&1; ros2 daemon start >/dev/null 2>&1" >/dev/null 2>&1
+  echo "    ROii nodes deduped (1 fault_injector + 1 health_monitor) -> no duplicated_node_checker gate"
+fi
+
 echo "==> [5/5] Waiting for localization to converge..."
 # (initialpose already seeded inside the e2e retry loop)
 sleep 30
