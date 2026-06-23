@@ -186,11 +186,11 @@ def main():
     # resampled (~0.5 m), so rviz shows the full 3D road surface (elevation incl.).
     cloud = []
     for d in L.values():
-        for line in (d["c"], d["left"], d["right"]):
-            for i in range(len(line) - 1):
+        for line in (d["left"], d["right"]):     # lane EDGES only (cleaner; the
+            for i in range(len(line) - 1):        # lanelet vector map shows centers)
                 x0, y0, z0 = line[i]; x1, y1, z1 = line[i + 1]
                 seg = math.hypot(x1 - x0, y1 - y0)
-                steps = max(1, int(seg / 0.5))
+                steps = max(1, int(seg / 1.5))    # 1.5 m spacing (was 0.5 -> 3x cleaner)
                 for s in range(steps):
                     t = s / steps
                     # cloud sits 0.3 m BELOW the lane surface = the ground the wheels

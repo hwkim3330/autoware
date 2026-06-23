@@ -104,5 +104,16 @@ DISPLAY=$DISP XAUTHORITY=$XA xhost +local: >/dev/null 2>&1 || true
 SUDO docker exec -d autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export DISPLAY=$DISP; export XAUTHORITY=/root/.Xauthority; \
    source /opt/autoware/setup.bash; rviz2 -d /root/roii_clean.rviz > /tmp/rviz.log 2>&1"
+# real maps (NGII): re-seed the ego on a WELL-CONNECTED lanelet at road elevation,
+# so tap-to-go / drive works right after a switch (find_spawn picks a stub).
+case "$SITE" in
+  pangyo*|kcity*|soongsil*)
+    SUDO docker cp "$REPO/ros/seed_realmap_start.py" autoware:/root/seed_realmap_start.py >/dev/null 2>&1
+    sleep 6
+    SUDO docker exec autoware bash -lc \
+      "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
+       python3 /root/seed_realmap_start.py $SITE 2>/dev/null" 2>/dev/null | grep -E "seed|seeded" || true
+    ;;
+esac
 echo "Done. Tablet: DRIVE or tap the map. (planning sim: perfect localization, no CARLA)"
 exit 0
