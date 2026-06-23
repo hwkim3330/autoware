@@ -91,26 +91,34 @@ def main():
     out = ET.Element("osm", {"version": "0.6", "generator": "ngii_to_lanelet2"})
     ET.SubElement(out, "MetaInfo", {"format_version": "1", "map_version": "1"})
     nid = [0]; node_cache = {}
+    node_elems = []; body_elems = []   # lanelet2 needs ALL nodes BEFORE ways/relations
 
     def node(x, y, z):
         key = (round(x, 2), round(y, 2))
         if key in node_cache:
             return node_cache[key]
         nid[0] += 1
-        n = ET.SubElement(out, "node", {"id": str(nid[0]), "lat": "0", "lon": "0"})
+        # real WGS84 too (absolute UTM-K -> lat/lon), so lanelet2 tools work AND
+        # Autoware's local projector uses local_x/local_y -- both valid.
+        lon_n, lat_n = to_wgs.transform(x + ox, y + oy)
+        n = ET.Element("node", {"id": str(nid[0]),
+                                "lat": f"{lat_n:.9f}", "lon": f"{lon_n:.9f}"})
         ET.SubElement(n, "tag", {"k": "local_x", "v": f"{x:.3f}"})
         ET.SubElement(n, "tag", {"k": "local_y", "v": f"{y:.3f}"})
         ET.SubElement(n, "tag", {"k": "ele", "v": f"{z:.2f}"})   # real NGII elevation
+        node_elems.append(n)
         node_cache[key] = nid[0]
         return nid[0]
 
     def linestring(pts, subtype):
+        refs = [node(x, y, z) for (x, y, z) in pts]   # create nodes FIRST
         nid[0] += 1
-        w = ET.SubElement(out, "way", {"id": str(nid[0])})
-        for (x, y, z) in pts:
-            ET.SubElement(w, "nd", {"ref": str(node(x, y, z))})
+        w = ET.Element("way", {"id": str(nid[0])})
+        for r in refs:
+            ET.SubElement(w, "nd", {"ref": str(r)})
         ET.SubElement(w, "tag", {"k": "type", "v": "line_thin"})
         ET.SubElement(w, "tag", {"k": "subtype", "v": subtype})
+        body_elems.append(w)
         return nid[0]
 
     def newid():
@@ -126,8 +134,24 @@ def main():
         lm = left_marks.get(lid); rm = right_marks.get(lid)
         left = orient(max(lm, key=len), center) if lm else offset(center, LANE_HALF, +1)
         right = orient(max(rm, key=len), center) if rm else offset(center, LANE_HALF, -1)
+        # skip degenerate boundaries (a mark that collapses to <2 distinct nodes
+        # @1cm makes lanelet2 reject the border -> "nonexistent member"); fall back
+        # to a clean centerline offset so every lanelet is valid.
+        def distinct(pts):
+            seen = []
+            for p in pts:
+                k = (round(p[0], 2), round(p[1], 2))
+                if not seen or seen[-1] != k:
+                    seen.append(k)
+            return len(seen)
+        if distinct(left) < 2:
+            left = offset(center, LANE_HALF, +1)
+        if distinct(right) < 2:
+            right = offset(center, LANE_HALF, -1)
+        if distinct(left) < 2 or distinct(right) < 2 or distinct(center) < 2:
+            continue   # genuinely degenerate link -> skip
         lw = linestring(left, "solid"); rw = linestring(right, "solid")
-        rel = ET.SubElement(out, "relation", {"id": str(newid())})
+        rel = ET.Element("relation", {"id": str(newid())}); body_elems.append(rel)
         ET.SubElement(rel, "member", {"type": "way", "ref": str(lw), "role": "left"})
         ET.SubElement(rel, "member", {"type": "way", "ref": str(rw), "role": "right"})
         ET.SubElement(rel, "tag", {"k": "type", "v": "lanelet"})
@@ -137,6 +161,10 @@ def main():
         ET.SubElement(rel, "tag", {"k": "speed_limit", "v": f"{SPEED_BY_RANK.get(str(rec.get('RoadRank','')),30)}.00"})
         n_ll += 1
 
+    for n in node_elems:   # nodes first, then ways + relations (lanelet2 parse order)
+        out.append(n)
+    for b in body_elems:
+        out.append(b)
     out_dir = os.path.expanduser(f"~/autoware_map/{site}")
     os.makedirs(out_dir, exist_ok=True)
     ET.ElementTree(out).write(os.path.join(out_dir, "lanelet2_map.osm"),
