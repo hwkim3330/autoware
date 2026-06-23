@@ -193,7 +193,10 @@ def main():
                 steps = max(1, int(seg / 0.5))
                 for s in range(steps):
                     t = s / steps
-                    cloud.append((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, z0 + (z1 - z0) * t))
+                    # cloud sits 0.3 m BELOW the lane surface = the ground the wheels
+                    # rest on, so the vehicle model sits ON the cloud (not buried in it)
+                    cloud.append((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t,
+                                  z0 + (z1 - z0) * t - 0.3))
     with open(os.path.join(out_dir, "pointcloud_map.pcd"), "w") as f:
         f.write("# .PCD v0.7\nVERSION 0.7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\n")
         f.write(f"WIDTH {len(cloud)}\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS {len(cloud)}\nDATA ascii\n")
