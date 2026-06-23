@@ -12,11 +12,16 @@ echo "[map-daemon] watching container:$CREQ (via docker exec) — tablet map sel
 SUDO docker exec autoware bash -c "rm -f $CREQ" 2>/dev/null
 rm -f "$HREQ"
 while true; do
-  TOWN=$(SUDO docker exec autoware bash -c "cat $CREQ 2>/dev/null; rm -f $CREQ" 2>/dev/null | tr -dc 'A-Za-z0-9')
-  [ -z "$TOWN" ] && [ -f "$HREQ" ] && { TOWN=$(tr -dc 'A-Za-z0-9' < "$HREQ"); rm -f "$HREQ"; }
+  TOWN=$(SUDO docker exec autoware bash -c "cat $CREQ 2>/dev/null; rm -f $CREQ" 2>/dev/null | tr -dc 'A-Za-z0-9_')
+  [ -z "$TOWN" ] && [ -f "$HREQ" ] && { TOWN=$(tr -dc 'A-Za-z0-9_' < "$HREQ"); rm -f "$HREQ"; }
   if [ -n "$TOWN" ]; then
     echo "[map-daemon] switching to $TOWN ..."
-    bash "$REPO/scripts/run_localization_demo.sh" "$TOWN"
+    case "$TOWN" in
+      pangyo*|soongsil*|kcity*)   # real-map sites -> planning_sim (no CARLA)
+        bash "$REPO/scripts/run_real_map_sim.sh" "/root/autoware_map/$TOWN" ;;
+      *)                          # CARLA Towns -> e2e localization demo
+        bash "$REPO/scripts/run_localization_demo.sh" "$TOWN" ;;
+    esac
     echo "[map-daemon] $TOWN up — back to watching"
   fi
   sleep 3

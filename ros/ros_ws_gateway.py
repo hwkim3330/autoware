@@ -943,12 +943,31 @@ class Bridge(Node):
                     niro["lastEvent"] = json.loads(s["niro_event"][0].data)
             except Exception:
                 niro = None
+        # live system monitor (실시간 노드/토픽 상태) -- node count cached ~4s
+        nowt = time.time()
+        if nowt - getattr(self, "_nodes_t", 0) > 4:
+            try:
+                self._nodes_cache = len(self.get_node_names())
+            except Exception:
+                self._nodes_cache = 0
+            self._nodes_t = nowt
+        system = {
+            "nodes": getattr(self, "_nodes_cache", 0),
+            "topics": [
+                {"n": "localization", "ok": bool(converged), "v": f"{ndt_hz:.0f} Hz"},
+                {"n": "planning", "ok": ntraj > 0, "v": f"{ntraj} pts"},
+                {"n": "control", "ok": op == 2, "v": "AUTO" if op == 2 else "STOP"},
+                {"n": "route", "ok": rstate in (2, 4), "v": ROUTE_STATE.get(rstate, "?")},
+                {"n": "vehicle", "ok": fresh("steer"), "v": f"{steer_deg:.0f}°"},
+            ],
+        }
         return {
             "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "source": "AUTOWARE_LIVE",
             "site": MAP_ORIGIN,
             "ego": ego,
             "niro": niro,
+            "system": system,
             "localization": {"converged": converged and (loc_init == 3), "initState": loc_init,
                              "mode": (s["mmode"][0].data if "mmode" in s
                                       else ("LIDAR_GNSS" if lidar_ok else "UNAVAILABLE")),
@@ -1009,14 +1028,18 @@ async def handler(ws):
                     # autoware_map bind mount (/root/autoware_map <-> host
                     # /home/kim/autoware_map), which the daemon watches.
                     town = str(data.get("town", "Town04"))
-                    if town.replace("Town", "").replace("HD", "").isdigit():
+                    # accept CARLA Towns AND real-map sites (pangyo_crd/pangyo_ngii/
+                    # soongsil/kcity); the daemon routes real sites to planning_sim.
+                    _real = ("pangyo", "soongsil", "kcity")
+                    if town.replace("Town", "").replace("HD", "").isdigit() \
+                       or any(town.startswith(s) for s in _real):
                         for p in ("/root/autoware_map/.roii_map_request",
                                   "/tmp/roii_map_request"):
                             try:
                                 open(p, "w").write(town)
                             except OSError:
                                 pass
-                        BRIDGE.last_cmd_result = f"map switch -> {town} (재기동, ~4분)"
+                        BRIDGE.last_cmd_result = f"map switch -> {town} (재기동, ~3분)"
                         print(f"[cmd] map -> {town}")
                 elif cmd == "fault":
                     import json as _json
