@@ -1,0 +1,8 @@
+# Niro Mode Manager policy (문서 3~5쪽)
+/niro_mode_manager:
+  ros__parameters:
+    # auto-revert to normal only after the lidar has been healthy this long
+    # (debounce so a flapping sensor doesn't oscillate the mode)
+    recover_debounce_sec: 2.0
+    # transition is considered failed if not committed within this
+    transition_timeout_sec: 1.0

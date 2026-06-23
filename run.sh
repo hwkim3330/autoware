@@ -15,6 +15,8 @@
 #   ./run.sh test            # 전 타운 자율주행 검증 (~40분)
 #   ./run.sh roii low|mid|high [Town]   # ROii 4라이다 실험 모드
 #   ./run.sh multimode [Town]           # 숭실대 멀티모드
+#   ./run.sh niro [Town]                # Niro 실차 구성(단일 Ouster OS2-128 + 이중측위) 주행
+#   ./run.sh niro-fault / niro-clear    # 라이다 결함 주입/해제 (GNSS 폴백 시연)
 # ============================================================================
 set -u
 REPO="$(cd "$(dirname "$0")" && pwd)"
@@ -27,6 +29,12 @@ CMD="${1:-$TOWN_DEFAULT}"
 case "$CMD" in
   status)  exec bash "$REPO/scripts/status.sh" ;;
   real)    exec bash "$REPO/scripts/run_real_map_sim.sh" "${2:-/root/autoware_map/sample-map-planning}" ;;
+  buildmap)  exec bash "$REPO/scripts/build_realmap.sh" "${2:-pangyo}" "${3:-1200}" ;;
+  realdrive) # real-map bring-up + continuous autonomous driving (planning_sim)
+    SITE="${2:-pangyo}"
+    bash "$REPO/scripts/run_real_map_sim.sh" "/root/autoware_map/$SITE"
+    SUDO docker cp "$REPO/ros/auto_realmap_drive.py" autoware:/root/auto_realmap_drive.py >/dev/null 2>&1
+    DEX "python3 -u /root/auto_realmap_drive.py $SITE" ;;
   test)    exec bash "$REPO/scripts/test_all_towns.sh" ;;
   replay)  exec bash "$REPO/scripts/run_replay.sh" "${2:-/root/replay/recorded}" "${3:-Town04}" ;;
   drive)   DEX "python3 /root/drive_monitor.py drive" ;;
@@ -57,6 +65,12 @@ case "$CMD" in
     echo "정리 완료 — CARLA 종료, 컨테이너 정지 (전기 절약). 다시 켜기: ./run.sh"
     ;;
   multimode) MULTIMODE=1 exec bash "$REPO/scripts/run_localization_demo.sh" "${2:-$TOWN_DEFAULT}" ;;
+  osm)       NIRO=1 exec bash "$REPO/scripts/run_osm_demo.sh" "${2:-soongsil}" ;;
+  niro)      # Niro 실차 구성: 단일 Ouster OS2-128 + RTK-GNSS + IMU, 이중측위(LiDAR/GNSS)
+             NIRO=1 MULTIMODE=1 exec bash "$REPO/scripts/run_localization_demo.sh" "${2:-$TOWN_DEFAULT}" ;;
+  niro-fault)  # 라이다 결함 주입 N초 (태블릿 FAULT 버튼과 동일)
+             DEX "ros2 topic pub --once /multimode/inject std_msgs/msg/String '{data: lidar_fail}'"; echo "LiDAR 결함 주입 -> GNSS 폴백" ;;
+  niro-clear)  DEX "ros2 topic pub --once /multimode/inject std_msgs/msg/String '{data: clear}'"; echo "결함 해제 -> 정상 이중측위" ;;
   roii)      exec bash "$REPO/scripts/run_roii_lidar_${2:-low}.sh" "${3:-$TOWN_DEFAULT}" ;;
   mapdaemon) exec bash "$REPO/scripts/map_switch_daemon.sh" ;;
   Town*)     SUDO docker start autoware >/dev/null 2>&1; exec bash "$REPO/scripts/run_localization_demo.sh" "$CMD" ;;

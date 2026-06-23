@@ -1,0 +1,53 @@
+{
+  "profile": "niro",
+  "note": "Niro real-vehicle sensor set (Soongsil Univ). Single roof Ouster OS2-128 + RTK-GNSS + IMU. Dual LiDAR/GNSS localization (이중측위). Mount positions are placeholders (not CAD).",
+  "vehicle": {
+    "name": "Niro",
+    "length": 4.42,
+    "width": 1.805,
+    "height": 1.56,
+    "wheel_base": 2.7,
+    "max_speed_kmh": 40
+  },
+  "sensors": [
+    {
+      "name": "top_ouster",
+      "model": "Ouster OS2-128",
+      "type": "sensor.lidar.ray_cast",
+      "frame": "lidar_top",
+      "topic": "/sensing/lidar/top/pointcloud_before_sync",
+      "x": 1.2,
+      "y": 0.0,
+      "z": 1.7,
+      "yaw_deg": 0,
+      "channels": 128,
+      "range": 120,
+      "points_per_second": 2621440,
+      "rotation_frequency": 10,
+      "horizontal_fov": 360.0,
+      "upper_fov": 11.25,
+      "lower_fov": -11.25
+    },
+    {
+      "name": "imu",
+      "model": "vehicle IMU",
+      "type": "sensor.other.imu",
+      "frame": "imu_link"
+    },
+    {
+      "name": "gnss",
+      "model": "RTK-GNSS",
+      "type": "sensor.other.gnss",
+      "frame": "gnss_link"
+    }
+  ],
+  "localization": {
+    "mode": "dual",
+    "pipelines": ["lidar_ndt", "gnss_ekf"],
+    "fusion": "pose_merger (per-mode weights, smooth transition)",
+    "modes": {
+      "normal": {"lidar_weight": 0.5, "gnss_weight": 0.5},
+      "lidar_fault": {"lidar_weight": 0.0, "gnss_weight": 1.0}
+    }
+  }
+}

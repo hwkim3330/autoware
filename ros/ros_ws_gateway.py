@@ -51,6 +51,17 @@ MAP_OSM = os.environ.get("LANELET_OSM", "/root/autoware_map/Town01/lanelet2_map.
 # CARLA spawn "x, y, z, roll, pitch, yaw" (CARLA coords) -- for the respawn cmd
 CARLA_SPAWN = os.environ.get("CARLA_SPAWN", "")
 RVIZ_DISPLAY = os.environ.get("RVIZ_DISPLAY", ":1")
+# Map geo-origin (lat,lon) + site name so the tablet can place the local map-frame
+# ego on a real OpenStreetMap basemap. Set by the OSM/real-map bring-up.
+#   NIRO_ORIGIN="lat,lon"   NIRO_SITE="soongsil"
+def _parse_origin():
+    o = os.environ.get("NIRO_ORIGIN", "")
+    try:
+        la, lo = [float(v) for v in o.split(",")[:2]]
+        return {"lat": la, "lon": lo, "site": os.environ.get("NIRO_SITE", "")}
+    except Exception:
+        return None
+MAP_ORIGIN = _parse_origin()
 MESH_DIR = "/opt/autoware/share/sample_vehicle_description/mesh"
 
 SENSOR_PARTS = {
@@ -168,6 +179,14 @@ class Bridge(Node):
         self.create_subscription(_Str, "/multimode/mode",
                                  lambda m: self._set("mmode", m), 1)
         self.pub_inject = self.create_publisher(_Str, "/multimode/inject", 1)
+        # Niro multimode telemetry (단일 Ouster OS2-128 + RTK-GNSS 이중측위).
+        # niro_bridge runs the Niro-spec Pose Merger live on the CARLA topics.
+        self.create_subscription(_Str, "/niro/multimode/status",
+                                 lambda m: self._set("niro_status", m), 1)
+        self.create_subscription(_Str, "/niro/multimode/transition_event",
+                                 lambda m: self._set("niro_event", m), 5)
+        from std_msgs.msg import Bool as _Bool
+        self.pub_niro_fault = self.create_publisher(_Bool, "/test/fault_injection/lidar", 1)
         # ROii 4-LiDAR experimental layer
         self.create_subscription(_Str, "/roii/lidar_health",
                                  lambda m: self._set("roii_health", m), 1)
@@ -463,8 +482,9 @@ class Bridge(Node):
             elif cmd == "respawn":
                 self._respawn()
             elif cmd == "fail_lidar":
-                from std_msgs.msg import String as _Str
+                from std_msgs.msg import String as _Str, Bool as _Bool
                 self.pub_inject.publish(_Str(data="lidar_fail"))
+                self.pub_niro_fault.publish(_Bool(data=True))   # Niro bridge fallback
                 self._res("FAULT INJECTED: lidar -> multimode fallback")
             elif isinstance(cmd, tuple) and cmd[0] == "roii_fault":
                 from std_msgs.msg import String as _Str
@@ -478,8 +498,9 @@ class Bridge(Node):
                 self._call(self.cli_stop, ChangeOperationMode.Request(), timeout=6.0)
                 self._res("EMERGENCY STOP")
             elif cmd == "heal":
-                from std_msgs.msg import String as _Str
+                from std_msgs.msg import String as _Str, Bool as _Bool
                 self.pub_inject.publish(_Str(data="clear"))
+                self.pub_niro_fault.publish(_Bool(data=False))   # Niro bridge clear
                 self._emergency = False
                 self._res("fault cleared -> auto mode selection")
             elif isinstance(cmd, tuple) and cmd[0] == "vehicle":
@@ -912,10 +933,22 @@ class Bridge(Node):
         if not any_part:  # 1-lidar mode: report the single pipeline
             parts = {"FrontCenterLidar": "OK" if lidar_ok else "FAULT"}
             faults = [] if lidar_ok else ["FrontCenterLidar"]
+        # Niro multimode telemetry (이중측위): live Pose Merger weights + sensors +
+        # last transition event from niro_bridge (/niro/multimode/*).
+        niro = None
+        if "niro_status" in s and fresh("niro_status", 3):
+            try:
+                niro = json.loads(s["niro_status"][0].data)
+                if "niro_event" in s and fresh("niro_event", 8):
+                    niro["lastEvent"] = json.loads(s["niro_event"][0].data)
+            except Exception:
+                niro = None
         return {
             "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "source": "AUTOWARE_LIVE",
+            "site": MAP_ORIGIN,
             "ego": ego,
+            "niro": niro,
             "localization": {"converged": converged and (loc_init == 3), "initState": loc_init,
                              "mode": (s["mmode"][0].data if "mmode" in s
                                       else ("LIDAR_GNSS" if lidar_ok else "UNAVAILABLE")),

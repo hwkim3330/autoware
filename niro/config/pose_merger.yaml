@@ -1,0 +1,16 @@
+# Niro Pose Merger — per-mode LiDAR/GNSS fusion weights (문서 기준)
+/niro_pose_merger:
+  ros__parameters:
+    # normal mode: trust both pipelines equally
+    normal.lidar_weight: 0.5
+    normal.gnss_weight: 0.5
+    # lidar_fault mode: fall fully back to GNSS
+    lidar_fault.lidar_weight: 0.0
+    lidar_fault.gnss_weight: 1.0
+    # an input older than this loses its weight (renormalized)
+    stale_threshold_sec: 0.4
+    # warn if the two pipelines' stamps differ by more than this
+    max_input_timestamp_diff_sec: 0.2
+    # weights ramp over this window on a mode change -> no output gap / jump
+    transition_duration_sec: 0.5
+    output_rate_hz: 50.0

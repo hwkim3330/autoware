@@ -199,7 +199,7 @@ SUDO docker exec autoware bash -lc \
    /opt/autoware/share/autoware_carla_interface/autoware_carla_interface.launch.xml" >/dev/null 2>&1
 
 # Refresh the gateway + perception stub + helper scripts in the container.
-for f in ros_ws_gateway.py perception_stub.py roii_watchdog.py multimode_supervisor.py traj_smoke.py find_spawn.py diag_route.py diag_connectivity.py; do
+for f in ros_ws_gateway.py perception_stub.py roii_watchdog.py multimode_supervisor.py niro_bridge.py traj_smoke.py find_spawn.py diag_route.py diag_connectivity.py; do
   [ -f "$REPO/ros/$f" ] && SUDO docker cp "$REPO/ros/$f" autoware:/root/$f >/dev/null 2>&1
 done
 SUDO docker cp "$REPO/container_patches/roii_clean.rviz" autoware:/root/roii_clean.rviz >/dev/null 2>&1
@@ -227,6 +227,15 @@ SUDO docker exec autoware bash -lc \
 CARLAYAML=/opt/autoware/share/autoware_launch/config/system/diagnostics/autoware-carla.yaml
 SUDO docker exec autoware bash -lc \
   "sed -i '/link: \/autoware\/localization\/accuracy }/d; /link: \/autoware\/localization\/sensor_fusion_status }/d' $CARLAYAML" >/dev/null 2>&1 || true
+# NIRO: the transform_map_to_base_link topic monitor can WEDGE in ERROR after a
+# transient TF gap (route churn during a re-drive) and never recover -- even though
+# map->base_link stays healthy (~20 Hz, ~0.05 s fresh) -- which then gates autonomous
+# availability so the car won't engage. The Niro demo removes that one leaf from the
+# autonomous diagnostic graph (EKF + niro_bridge still monitor localization). CARLA-only.
+if [ "${NIRO:-0}" = "1" ]; then
+  SUDO docker exec autoware bash -lc \
+    "sed -i '\#path: /autoware/localization/topic_rate_check/transform#,/name: localization_topic_status/d' $LOCYAML" >/dev/null 2>&1 || true
+fi
 CTLYAML=/opt/autoware/share/autoware_launch/config/system/diagnostics/control.yaml
 SUDO docker exec autoware bash -lc \
   "sed -i '/link: \/autoware\/control\/topic_rate_check\/trajectory_follower }/d; /link: \/autoware\/control\/topic_rate_check\/control_command }/d; /link: \/autoware\/control\/performance_monitoring\/lane_departure }/d; /link: \/autoware\/control\/performance_monitoring\/control_state }/d' $CTLYAML" >/dev/null 2>&1 || true
@@ -419,6 +428,18 @@ SUDO docker exec autoware bash -lc \
 if [ "${MULTIMODE:-0}" = "1" ] || [ -n "${ROII_PROFILE:-}" ]; then
   SUDO docker exec -d autoware bash -lc \
     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/multimode_supervisor.py --ros-args -p use_sim_time:=true > /tmp/multimode.log 2>&1"
+fi
+# NIRO=1: run the Niro multimode bridge BESIDE the supervisor. It demonstrates the
+# Niro spec's richer Pose Merger (per-mode weighted LiDAR/GNSS fusion + smooth
+# transition + jump measurement) on the CARLA topics, feeding the Niro tablet
+# dashboard via /niro/multimode/*. The supervisor still owns the EKF pose source
+# (proven driving); the bridge is the telemetry/redundancy layer.
+if [ "${NIRO:-0}" = "1" ]; then
+  SUDO docker exec autoware bash -c 'pkill -9 -f niro_bridge.py; exit 0' >/dev/null 2>&1
+  sleep 1
+  SUDO docker exec -d autoware bash -lc \
+    "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/niro_bridge.py --ros-args -p use_sim_time:=true > /tmp/niro_bridge.log 2>&1"
+  echo "    Niro bridge up -> /niro/multimode/* (단일 Ouster OS2-128 + RTK-GNSS 이중측위)"
 fi
 # gateway in its OWN docker exec -d (not chained with &, which left it unbound)
 SUDO docker exec -d autoware bash -lc \
