@@ -28,11 +28,16 @@ def sub(ll):
 
 
 def pt(p):
+    a = p.attributes
     try:
-        return float(p.attributes["local_x"]), float(p.attributes["local_y"]), \
-            float(p.attributes.get("ele", 0))
+        x = float(a["local_x"]); y = float(a["local_y"])  # a[key] -> str value
     except Exception:
         return None
+    try:
+        z = float(a["ele"])
+    except Exception:
+        z = 0.0
+    return x, y, z
 
 
 def center(ll):
@@ -44,7 +49,9 @@ def center(ll):
 
 
 road = [ll for ll in m.laneletLayer if sub(ll) == "road"]
-start = max(road, key=lambda ll: len(g.reachableSet(ll, 1500.0, 0)) if len(center(ll)) >= 4 else 0)
+# sample (reachableSet over every lanelet is slow); take the best of a sample
+sample = [ll for ll in road[::4] if len(center(ll)) >= 4]
+start = max(sample, key=lambda ll: len(g.reachableSet(ll, 800.0, 0)))
 c = center(start)
 sx, sy, sz = c[0]
 sx2, sy2, _ = c[3]
