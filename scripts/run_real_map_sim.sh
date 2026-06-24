@@ -98,7 +98,10 @@ fi
 SUDO docker exec -d autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export LANELET_OSM=$MAP/lanelet2_map.osm; \
    export NIRO_ORIGIN='$ORIGIN'; export NIRO_SITE='$SITE'; \
-   source /opt/autoware/setup.bash; python3 -u /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
+   source /opt/autoware/setup.bash; python3 -u /root/ros_ws_gateway.py --ros-args -p use_sim_time:=false > /tmp/gw.log 2>&1"
+# ^ planning_simulator publishes NO /clock, so use_sim_time:=true FREEZES every ROS
+#   timer in the gateway (incl. _process_cmds) -> no app command ever runs. Wall-clock
+#   (false) makes timers fire normally. (CARLA path keeps use_sim_time:=true; it has /clock.)
 command -v adb >/dev/null && adb reverse tcp:8765 tcp:8765 >/dev/null 2>&1 || true
 DISPLAY=$DISP XAUTHORITY=$XA xhost +local: >/dev/null 2>&1 || true
 SUDO docker exec -d autoware bash -lc \

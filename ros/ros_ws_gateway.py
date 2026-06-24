@@ -464,6 +464,18 @@ class Bridge(Node):
             self.cmds.clear()
             self.cmds.append(cmd)
 
+    def cmd_loop(self):
+        # Drain commands on a WALL-CLOCK thread, not the ROS timer: planning_sim
+        # publishes no /clock, so with use_sim_time the ROS timer freezes and NO
+        # app command runs. This loop is clock-independent; _call's futures are
+        # still serviced by the spinning executor. (CARLA path also benefits.)
+        while True:
+            try:
+                self._process_cmds()
+            except Exception as e:
+                self.get_logger().warn(f"cmd_loop: {e}")
+            time.sleep(0.2)
+
     # ---- command execution (runs in ROS executor thread via timer) ----
     def _process_cmds(self):
         with self.lock:
@@ -615,15 +627,23 @@ class Bridge(Node):
     def _engage(self, gx, gy):
         tag = f" ({gx:.0f},{gy:.0f})" if gx is not None else ""
         self._res(f"route set{tag}; engaging")
-        # The trajectory appears ~2-3 s after the route and autonomous mode only
-        # becomes AVAILABLE then -- retry the engage until it sticks (~20 s).
-        for i in range(6):
+        # Trajectory generation + autonomous AVAILABILITY can take 15-25 s on big
+        # real maps. Wait for availability first (cheap topic check), THEN engage;
+        # retry up to ~40 s so tap-to-go succeeds first try (was a fixed 12 s window
+        # that timed out before the planner finished -> "target mode not available").
+        ra = None
+        for i in range(20):
+            with self.lock:
+                op = self.s.get("op")
+            avail = bool(op and op[0].is_autonomous_mode_available) if op else False
+            if avail:
+                ra = self._call(self.cli_auto, ChangeOperationMode.Request())
+                if ra and ra.status.success:
+                    self._res("AUTONOMOUS"); return
+            if i % 3 == 0:
+                self._res(f"engaging... ({i + 1}/20){' (waiting for trajectory)' if not avail else ''}")
             time.sleep(2.0)
-            ra = self._call(self.cli_auto, ChangeOperationMode.Request())
-            if ra and ra.status.success:
-                self._res("AUTONOMOUS"); return
-            self._res(f"engaging... ({i + 1}/6)")
-        self._res(f"route set, engage failed: {ra.status.message if ra else 'no resp'}")
+        self._res(f"route set, engage failed: {ra.status.message if ra else 'availability timeout'}")
 
     def _set_route_to(self, gx, gy, gtg, timeout=14.0):
         """Set a route to one goal pose; return the service result."""
@@ -1101,6 +1121,8 @@ async def main():
     rclpy.init()
     BRIDGE = Bridge()
     threading.Thread(target=spin_ros, args=(BRIDGE,), daemon=True).start()
+    # wall-clock command drain (immune to sim-time ROS-timer freeze on planning_sim)
+    threading.Thread(target=BRIDGE.cmd_loop, daemon=True).start()
     print("=" * 56)
     print("Autoware ROS <-> ROii Monitor gateway (with drive control)")
     print(f"  ws://<host>:{WS_PORT}{WS_PATH}   (USB: adb reverse tcp:{WS_PORT} tcp:{WS_PORT})")
