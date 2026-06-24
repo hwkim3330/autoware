@@ -21,6 +21,7 @@ class NiroCommandScreen extends ConsumerStatefulWidget {
 class _NiroCommandScreenState extends ConsumerState<NiroCommandScreen> {
   bool _manual = false;
   Offset? _pendingDest; // tapped destination awaiting confirm
+  DateTime? _lastRx;    // wall-clock time of the last status frame received
 
   // --- palette ---
   static const _bg = Color(0xFFEFF2F6);
@@ -37,6 +38,15 @@ class _NiroCommandScreenState extends ConsumerState<NiroCommandScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Track when the most recent live frame arrived (for the stale indicator).
+    ref.listen(autowareStateProvider, (prev, next) {
+      next.whenData((s) {
+        if (s.operationMode != 'DISCONNECTED') {
+          setState(() => _lastRx = DateTime.now());
+        }
+      });
+    });
+
     final stateAsync = ref.watch(autowareStateProvider);
     final lanes = ref.watch(lanesProvider).valueOrNull ?? const [];
     final polys = ref.watch(lanePolysProvider).valueOrNull ?? const [];
@@ -44,18 +54,145 @@ class _NiroCommandScreenState extends ConsumerState<NiroCommandScreen> {
     return Scaffold(
       backgroundColor: _bg,
       body: SafeArea(
-        child: stateAsync.when(
-          loading: () => _connecting(),
-          error: (_, _) => _connecting(),
-          data: (s) {
-            if (s.operationMode == 'DISCONNECTED' &&
-                s.locMode == 'DISCONNECTED') {
-              return _connecting();
-            }
-            return _cockpit(s, lanes, polys);
-          },
+        child: Stack(
+          children: [
+            stateAsync.when(
+              loading: () => _connecting(),
+              error: (_, _) => _connecting(),
+              data: (s) {
+                if (s.operationMode == 'DISCONNECTED' &&
+                    s.locMode == 'DISCONNECTED') {
+                  return _connecting();
+                }
+                return _cockpit(s, lanes, polys);
+              },
+            ),
+            // settings gear (top-right) — gateway URL + connection status
+            Positioned(
+              top: 16,
+              right: 16,
+              child: _gearButton(),
+            ),
+          ],
         ),
       ),
+    );
+  }
+
+  Widget _gearButton() {
+    return Material(
+      color: Colors.white,
+      shape: const CircleBorder(),
+      elevation: 3,
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: _openSettings,
+        child: const Padding(
+          padding: EdgeInsets.all(10),
+          child: Icon(Icons.settings_rounded, color: _muted, size: 22),
+        ),
+      ),
+    );
+  }
+
+  void _openSettings() {
+    final current = ref.read(gatewayUrlProvider);
+    final controller = TextEditingController(text: current);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      isScrollControlled: true,
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 22, right: 22, top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 22,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: const [
+                Icon(Icons.lan_rounded, color: _accent, size: 22),
+                SizedBox(width: 8),
+                Text('게이트웨이 연결 설정',
+                    style: TextStyle(
+                        color: _ink, fontSize: 18, fontWeight: FontWeight.w800)),
+              ]),
+              const SizedBox(height: 16),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 14),
+                decoration: InputDecoration(
+                  labelText: 'WebSocket URL',
+                  hintText: 'ws://127.0.0.1:8765/ws',
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  prefixIcon: const Icon(Icons.link_rounded),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text('USB 연결은 127.0.0.1, Wi-Fi는 ws://<PC-IP>:8765/ws 사용',
+                  style: TextStyle(color: _muted, fontSize: 12)),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _quickUrl(controller, 'USB (CARLA)', 'ws://127.0.0.1:8765/ws'),
+                  _quickUrl(controller, 'HMI carla_niro', 'ws://127.0.0.1:8766/ws'),
+                  _quickUrl(controller, '실차 ssu_niro', 'ws://192.168.0.10:8765/ws'),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('취소', style: TextStyle(color: _muted)),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _accent,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: () {
+                        final url = controller.text.trim();
+                        if (url.isNotEmpty) {
+                          ref.read(gatewayUrlProvider.notifier).state = url;
+                          setState(() => _lastRx = null);
+                        }
+                        Navigator.pop(ctx);
+                      },
+                      child: const Text('저장 & 재연결'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _quickUrl(TextEditingController c, String label, String url) {
+    return ActionChip(
+      label: Text(label, style: const TextStyle(fontSize: 12)),
+      backgroundColor: _accent.withValues(alpha: 0.08),
+      side: BorderSide(color: _accent.withValues(alpha: 0.25)),
+      labelStyle: const TextStyle(color: _accent, fontWeight: FontWeight.w700),
+      onPressed: () => c.text = url,
     );
   }
 
@@ -104,6 +241,12 @@ class _NiroCommandScreenState extends ConsumerState<NiroCommandScreen> {
 
   Widget _mapColumn(AutowareState s,
       List<List<double>> lanes, List<List<List<double>>> polys) {
+    final readOnly = s.readOnly;
+    // In read-only mode tap-to-go must not issue a goto command.
+    void onTap(double x, double y) {
+      if (readOnly) return;
+      setState(() => _pendingDest = Offset(x, y));
+    }
     return Column(
       children: [
         Expanded(
@@ -117,9 +260,7 @@ class _NiroCommandScreenState extends ConsumerState<NiroCommandScreen> {
                       ? OsmMapView(
                           s: s,
                           polys: polys,
-                          onTapWorld: (x, y) {
-                            setState(() => _pendingDest = Offset(x, y));
-                          },
+                          onTapWorld: onTap,
                         )
                       // CARLA / Town mode: synthetic top-down map
                       : MapView(
@@ -127,9 +268,7 @@ class _NiroCommandScreenState extends ConsumerState<NiroCommandScreen> {
                           lanes: lanes,
                           polys: polys,
                           light: true,
-                          onTapWorld: (x, y) {
-                            setState(() => _pendingDest = Offset(x, y));
-                          },
+                          onTapWorld: onTap,
                         ),
                 ),
                 // top HUD
@@ -143,6 +282,19 @@ class _NiroCommandScreenState extends ConsumerState<NiroCommandScreen> {
                   left: 0,
                   right: 0,
                   child: Center(child: _StatusPill(s: s)),
+                ),
+                // read-only badge (top-left, below speed HUD)
+                if (readOnly)
+                  Positioned(
+                    left: 14,
+                    top: 92,
+                    child: _ReadOnlyBadge(s: s),
+                  ),
+                // connection / stale indicator (top-right, left of gear)
+                Positioned(
+                  top: 14,
+                  right: 62,
+                  child: _ConnPill(s: s, lastRx: _lastRx),
                 ),
                 // MRM red banner
                 if (s.mrm.isNotEmpty)
@@ -160,8 +312,8 @@ class _NiroCommandScreenState extends ConsumerState<NiroCommandScreen> {
                     bottom: 18,
                     child: Center(child: _confirmBubble()),
                   ),
-                // manual driving controls overlaid at the bottom
-                if (_manual)
+                // manual driving controls overlaid at the bottom (full-control only)
+                if (_manual && !readOnly)
                   Positioned(
                     left: 0,
                     right: 0,
@@ -176,7 +328,8 @@ class _NiroCommandScreenState extends ConsumerState<NiroCommandScreen> {
           ),
         ),
         const SizedBox(height: 12),
-        _controlBar(s),
+        // Read-only HMI: replace the control bar with a status readout strip.
+        readOnly ? _readOnlyBar(s) : _controlBar(s),
       ],
     );
   }
@@ -318,6 +471,101 @@ class _NiroCommandScreenState extends ConsumerState<NiroCommandScreen> {
             filled: true,
             onTap: () => _send({'cmd': 'trigger_emergency'}),
           ),
+        ],
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------------
+  // Read-only HMI status strip (no control buttons). Null-safe readouts.
+  // ------------------------------------------------------------------
+  Widget _readOnlyBar(AutowareState s) {
+    final loc = s.hmiLoc ?? const {};
+    final aw = {
+      'operationMode': s.operationMode,
+      'routeState': s.routeState,
+      'mrmState': s.mrm.isEmpty ? 'UNKNOWN' : s.mrm,
+    };
+    String num1(dynamic v, [String unit = '']) =>
+        (v is num) ? '${v.toStringAsFixed(2)}$unit' : '—';
+    String pct(dynamic v) =>
+        (v is num) ? '${(v * 100).toStringAsFixed(0)}%' : '—';
+    final lastEvent = s.events.isNotEmpty ? s.events.last : null;
+    String evText = '—';
+    if (lastEvent is Map) {
+      evText = (lastEvent['message'] ?? lastEvent['type'] ?? lastEvent['name'] ?? lastEvent.toString()).toString();
+    } else if (lastEvent != null) {
+      evText = lastEvent.toString();
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: _panel,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: const [
+          BoxShadow(color: Colors.black12, blurRadius: 16, offset: Offset(0, 4)),
+        ],
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _roPill('PROFILE', s.profile ?? '—'),
+            _roPill('SOURCE',
+                s.isRealVehicle ? '실차' : (s.hmiSource ?? 'simulation')),
+            _roPill('MODE', _displayStr(aw['operationMode'])),
+            _roPill('ROUTE', _displayStr(aw['routeState'])),
+            _roPill('MRM', _displayStr(aw['mrmState'])),
+            const SizedBox(width: 6),
+            _roPill('측위', _displayStr(loc['mode']?.toString())),
+            _roPill('LiDAR w', pct(loc['lidarWeight'])),
+            _roPill('GNSS w', pct(loc['gnssWeight'])),
+            _roPill('LiDAR',
+                loc['lidarFresh'] == true ? 'FRESH' : (loc.containsKey('lidarFresh') ? 'STALE' : '—'),
+                bad: loc['lidarFresh'] == false),
+            _roPill('GNSS',
+                loc['gnssFresh'] == true ? 'FRESH' : (loc.containsKey('gnssFresh') ? 'STALE' : '—'),
+                bad: loc['gnssFresh'] == false),
+            _roPill('Δt', num1(loc['timestampDiffSec'], 's')),
+            _roPill('GAP', num1(loc['pipelineGapM'], 'm')),
+            const SizedBox(width: 6),
+            _roPill('EVENT', evText),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Display helper: null/empty -> placeholder; UNKNOWN/UNAVAILABLE kept verbatim.
+  String _displayStr(String? v) {
+    if (v == null || v.isEmpty) return '—';
+    if (v == 'UNAVAILABLE') return 'N/A';
+    return v;
+  }
+
+  Widget _roPill(String label, String value, {bool bad = false}) {
+    final c = bad ? _red : _ink;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: const TextStyle(
+                  color: _muted,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5)),
+          const SizedBox(height: 1),
+          Text(value,
+              style: TextStyle(
+                  color: c, fontSize: 13, fontWeight: FontWeight.w800)),
         ],
       ),
     );
@@ -465,6 +713,84 @@ class _StatusPill extends StatelessWidget {
 }
 
 // ===========================================================================
+//  Read-only badge (shown when capabilities.readOnly == true)
+// ===========================================================================
+class _ReadOnlyBadge extends StatelessWidget {
+  final AutowareState s;
+  const _ReadOnlyBadge({required this.s});
+
+  @override
+  Widget build(BuildContext context) {
+    final src = s.isRealVehicle ? 'real_vehicle' : (s.hmiSource ?? 'hmi');
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF334155),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)],
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.lock_rounded, color: Colors.white, size: 16),
+        const SizedBox(width: 8),
+        Text('읽기 전용 ($src)',
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.3)),
+      ]),
+    );
+  }
+}
+
+// ===========================================================================
+//  Connection / staleness pill (top-right)
+// ===========================================================================
+class _ConnPill extends StatelessWidget {
+  final AutowareState s;
+  final DateTime? lastRx;
+  const _ConnPill({required this.s, required this.lastRx});
+
+  @override
+  Widget build(BuildContext context) {
+    // Stale if the gateway says so, or no frame in >3s locally.
+    final ageMs = lastRx == null
+        ? null
+        : DateTime.now().difference(lastRx!).inMilliseconds;
+    final localStale = ageMs != null && ageMs > 3000;
+    final stale = s.dataStale || localStale;
+    final c = stale ? const Color(0xFFDC2626) : const Color(0xFF16A34A);
+    final ageTxt = ageMs == null
+        ? '—'
+        : (ageMs < 1000 ? '${ageMs}ms' : '${(ageMs / 1000).toStringAsFixed(1)}s');
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 10)],
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: 9, height: 9,
+          decoration: BoxDecoration(
+            color: c, shape: BoxShape.circle,
+            boxShadow: [BoxShadow(color: c.withValues(alpha: 0.5), blurRadius: 6)],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(stale ? '연결 끊김' : '연결됨',
+            style: TextStyle(
+                color: c, fontSize: 12, fontWeight: FontWeight.w800)),
+        const SizedBox(width: 6),
+        Text('· $ageTxt 전',
+            style: const TextStyle(color: Color(0xFF64748B), fontSize: 11)),
+      ]),
+    );
+  }
+}
+
+// ===========================================================================
 //  Small status pill (bottom bar)
 // ===========================================================================
 class _StatPill extends StatelessWidget {
@@ -528,11 +854,107 @@ class _NiroPanel extends StatelessWidget {
         ],
       ),
       padding: const EdgeInsets.all(16),
-      child: niro != null
-          ? _content(niro)                       // CARLA niro / real-vehicle: real 이중측위
-          : (s.site != null ? _navPanel() : _placeholder()),  // real-map planning_sim: navigation/측위
+      child: s.readOnly
+          ? _readOnlyPanel()                     // read-only HMI gateway: live 이중측위 (no control)
+          : niro != null
+              ? _content(niro)                   // CARLA niro / real-vehicle: real 이중측위
+              : (s.site != null ? _navPanel() : _placeholder()),  // real-map planning_sim: navigation/측위
     );
   }
+
+  // Read-only HMI 이중측위 panel — reuses the weight-bar/sensor visuals but is
+  // built from the read-only schema (localization.* / sensors.*). No commands.
+  Widget _readOnlyPanel() {
+    final loc = s.hmiLoc ?? const {};
+    final lw = _d(loc['lidarWeight']);
+    final gw = _d(loc['gnssWeight']);
+    final lfresh = loc['lidarFresh'] == true;
+    final gfresh = loc['gnssFresh'] == true;
+    final valid = loc['valid'] == true;
+    final mode = loc['mode']?.toString() ?? 'UNKNOWN';
+    final gapKnown = loc['pipelineGapM'] is num;
+    final gap = _d(loc['pipelineGapM']);
+    final sensors = s.sensors; // {lidar,gnss,imu,camera} -> NORMAL/UNAVAILABLE...
+    String sens(String k) => sensors[k] ?? '—';
+    bool sensOk(String k) => sensors[k] == 'NORMAL';
+    String ageTxt(dynamic v) =>
+        (v is num) ? '${(v).toStringAsFixed(2)}s' : '—';
+
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _header(),
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: (valid ? _green : _red).withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                  color: (valid ? _green : _red).withValues(alpha: 0.35),
+                  width: 1.5),
+            ),
+            child: Row(children: [
+              Icon(valid ? Icons.verified_rounded : Icons.error_rounded,
+                  color: valid ? _green : _red, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text('측위 $mode',
+                    style: TextStyle(
+                        color: valid ? _green : _red,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800)),
+              ),
+              if (!valid)
+                const Text('INVALID',
+                    style: TextStyle(
+                        color: _red, fontSize: 10, fontWeight: FontWeight.w800)),
+            ]),
+          ),
+          const SizedBox(height: 16),
+          _WeightBar(label: 'LiDAR', weight: lw, color: _accent, fresh: lfresh),
+          const SizedBox(height: 10),
+          _WeightBar(label: 'GNSS', weight: gw, color: const Color(0xFF22C55E), fresh: gfresh),
+          const SizedBox(height: 16),
+          const Text('센서 상태',
+              style: TextStyle(
+                  color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+          const SizedBox(height: 8),
+          _sensorRow('LiDAR', sensOk('lidar'), sens('lidar')),
+          _sensorRow('GNSS', sensOk('gnss'), sens('gnss')),
+          _sensorRow('IMU', sensOk('imu'), sens('imu')),
+          _sensorRow('Camera', sensOk('camera'), sens('camera')),
+          const Divider(height: 26),
+          _roKv('LiDAR pose age', ageTxt(loc['lidarPoseAgeSec'])),
+          _roKv('GNSS pose age', ageTxt(loc['gnssPoseAgeSec'])),
+          _roKv('Δ timestamp', ageTxt(loc['timestampDiffSec'])),
+          _roKv('파이프라인 갭', gapKnown ? '${gap.toStringAsFixed(2)} m' : '—',
+              warn: gapKnown && gap > 0.5),
+          const Divider(height: 26),
+          const Text('MRM 단계',
+              style: TextStyle(
+                  color: _muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+          const SizedBox(height: 8),
+          _MrmLadder(mrm: s.mrm),
+        ],
+      ),
+    );
+  }
+
+  Widget _roKv(String k, String v, {bool warn = false}) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(children: [
+          Text(k, style: const TextStyle(color: _muted, fontSize: 13)),
+          const Spacer(),
+          Text(v,
+              style: TextStyle(
+                  color: warn ? _red : _ink,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w800)),
+        ]),
+      );
 
   // Real-map (planning_sim) mode: 이중측위 has no sensors to fuse, so show what IS
   // real here — localization status, site, route progress, speed, MRM. Honest:

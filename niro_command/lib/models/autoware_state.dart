@@ -40,6 +40,18 @@ class AutowareState {
   final Map<String, dynamic>? system; // live system monitor {nodes:int, topics:[{n,ok,v}]}
   final List<DetectedObj> objects;   // CenterPoint surround objects (Tesla view)
 
+  // --- read-only HMI gateway schema (carla_niro:8766 / ssu_niro:8765) ---
+  // These are null/empty for the existing CARLA gateway frame (which has NO
+  // `capabilities`). When present, the frame is from the read-only HMI gateway.
+  final Map<String, dynamic>? capabilities; // {readOnly,setRoute,engage,stop,mrm,teleop,faultInjection}
+  final String? profile;            // e.g. 'ssu_niro' / 'carla_niro'
+  final String? hmiSource;          // 'real_vehicle' / 'simulation'
+  final String schemaVersion;       // '' when absent
+  final Map<String, dynamic>? connection; // {rosConnected,dataStale,lastUpdateMs}
+  final Map<String, dynamic>? hmiLoc; // raw read-only localization block (weights/freshness)
+  final Map<String, dynamic>? hmiVehicle; // raw read-only vehicle block (nullable speed/steer)
+  final List<dynamic> events;       // read-only event log (empty when absent)
+
   const AutowareState({
     required this.ts,
     required this.x,
@@ -70,10 +82,26 @@ class AutowareState {
     this.site,
     this.system,
     this.objects = const [],
+    this.capabilities,
+    this.profile,
+    this.hmiSource,
+    this.schemaVersion = '',
+    this.connection,
+    this.hmiLoc,
+    this.hmiVehicle,
+    this.events = const [],
   });
 
   bool get isAutonomous => operationMode == 'AUTONOMOUS';
   bool get isDriving => speedKmh > 0.3;
+
+  // --- read-only HMI gateway helpers ---
+  /// True when the frame comes from the read-only HMI gateway and forbids control.
+  bool get readOnly => capabilities?['readOnly'] == true;
+  /// True when this read-only frame originates from the real vehicle (not sim).
+  bool get isRealVehicle => hmiSource == 'real_vehicle';
+  /// True when the gateway reports its ROS data is stale.
+  bool get dataStale => connection?['dataStale'] == true;
 
   factory AutowareState.fromJson(Map<String, dynamic> j) {
     final ego = (j['ego'] ?? {}) as Map<String, dynamic>;
@@ -84,6 +112,49 @@ class AutowareState {
     final parts = (j['parts'] ?? {}) as Map<String, dynamic>;
     final veh = (j['vehicle'] ?? {}) as Map<String, dynamic>;
     double d(v) => (v is num) ? v.toDouble() : 0.0;
+
+    // The read-only HMI gateway frame is distinguished by a `capabilities` block.
+    // Its layout differs from CARLA: speed lives in vehicle.speedKmh, op-mode/
+    // route/mrm live under `autoware`, localization carries fusion weights.
+    final bool isHmi = j['capabilities'] is Map;
+    if (isHmi) {
+      final aw = (j['autoware'] ?? {}) as Map<String, dynamic>;
+      final conn = (j['connection'] ?? {}) as Map<String, dynamic>;
+      // `mrmState` UNKNOWN/NORMAL/NONE -> empty (no banner); otherwise pass through.
+      final rawMrm = aw['mrmState']?.toString() ?? '';
+      final mrmUp = rawMrm.toUpperCase();
+      final mrm = (mrmUp == 'UNKNOWN' || mrmUp == 'NORMAL' ||
+              mrmUp == 'NONE' || mrmUp.isEmpty)
+          ? ''
+          : rawMrm;
+      return AutowareState(
+        ts: DateTime.tryParse(j['timestamp']?.toString() ?? '') ?? DateTime.now(),
+        x: 0, y: 0, z: 0, yawDeg: 0,
+        speedKmh: (veh['speedKmh'] is num) ? (veh['speedKmh'] as num).toDouble() : 0.0,
+        localized: loc['converged'] == true,
+        locInitState: 0,
+        locMode: loc['mode']?.toString() ?? 'UNKNOWN',
+        ndtHz: 0,
+        operationMode: aw['operationMode']?.toString() ?? 'UNKNOWN',
+        autonomousAvailable: false,
+        routeState: aw['routeState']?.toString() ?? 'UNKNOWN',
+        trajPoints: 0,
+        cmdResult: '',
+        sensors: sensors.map((k, v) => MapEntry(k, v.toString())),
+        faults: const [],
+        steerDeg: (veh['steeringDeg'] is num) ? (veh['steeringDeg'] as num).toDouble() : 0.0,
+        mrm: mrm,
+        capabilities: Map<String, dynamic>.from(j['capabilities'] as Map),
+        profile: j['profile']?.toString(),
+        hmiSource: j['source']?.toString(),
+        schemaVersion: j['schemaVersion']?.toString() ?? '',
+        connection: Map<String, dynamic>.from(conn),
+        hmiLoc: loc.isNotEmpty ? Map<String, dynamic>.from(loc) : null,
+        hmiVehicle: veh.isNotEmpty ? Map<String, dynamic>.from(veh) : null,
+        events: (j['events'] is List) ? List<dynamic>.from(j['events'] as List) : const [],
+      );
+    }
+
     return AutowareState(
       ts: DateTime.tryParse(j['ts']?.toString() ?? '') ?? DateTime.now(),
       x: d(ego['x']), y: d(ego['y']), z: d(ego['z']),
