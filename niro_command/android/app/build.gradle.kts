@@ -32,6 +32,22 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // Two installable apps from ONE codebase (the app is capability-aware at runtime):
+    //   command -> com.keti.niro_command  (CARLA full-control, default)
+    //   hmi     -> com.keti.niro.hmi      (read-only real-vehicle HMI)
+    flavorDimensions += "mode"
+    productFlavors {
+        create("command") {
+            dimension = "mode"
+            resValue("string", "app_name", "Niro Command")
+        }
+        create("hmi") {
+            dimension = "mode"
+            applicationId = "com.keti.niro.hmi"
+            resValue("string", "app_name", "Niro HMI")
+        }
+    }
 }
 
 kotlin {

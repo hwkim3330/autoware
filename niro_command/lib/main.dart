@@ -19,8 +19,11 @@ class NiroCommandApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // APP_MODE is passed at build time (--dart-define=APP_MODE=hmi for the
+    // read-only flavor); purely cosmetic for the window title.
+    const mode = String.fromEnvironment('APP_MODE', defaultValue: 'command');
     return MaterialApp(
-      title: 'Niro Command',
+      title: mode == 'hmi' ? 'Niro HMI' : 'Niro Command',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
