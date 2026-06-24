@@ -27,6 +27,7 @@ echo "==> [1/4] Reset container, install configs (map: $MAP)"
 SUDO docker restart autoware >/dev/null 2>&1; sleep 6
 SUDO docker cp "$REPO/config/fastdds_udp.xml" autoware:/tmp/udp.xml >/dev/null 2>&1
 SUDO docker cp "$REPO/ros/ros_ws_gateway.py" autoware:/root/ros_ws_gateway.py >/dev/null 2>&1
+SUDO docker cp "$REPO/ros/virtual_lidar.py" autoware:/root/virtual_lidar.py >/dev/null 2>&1
 SUDO docker cp "$REPO/container_patches/roii_clean.rviz" autoware:/root/roii_clean.rviz >/dev/null 2>&1
 SUDO docker exec autoware bash -lc \
   "sed -i 's/max_vel: 4.17/max_vel: 8.33/' \
@@ -111,6 +112,11 @@ SUDO docker exec -d autoware bash -lc \
 # so tap-to-go / drive works right after a switch (find_spawn picks a stub).
 case "$SITE" in
   pangyo*|kcity*|soongsil*)
+    # virtual LiDAR: live scan from the 3D map cloud follows the ego (CARLA-like
+    # live cloud on the real precise map; planning_sim has no real sensors)
+    SUDO docker exec -d autoware bash -lc \
+      "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
+       python3 -u /root/virtual_lidar.py --pcd /root/autoware_map/$SITE/pointcloud_map.pcd > /tmp/vlidar.log 2>&1"
     SUDO docker cp "$REPO/ros/seed_realmap_start.py" autoware:/root/seed_realmap_start.py >/dev/null 2>&1
     sleep 6
     SUDO docker exec autoware bash -lc \

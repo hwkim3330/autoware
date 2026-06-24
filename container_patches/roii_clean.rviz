@@ -26,10 +26,11 @@ Visualization Manager:
         Depth: 5
         Durability Policy: Transient Local
         Reliability Policy: Reliable
-      Color Transformer: FlatColor
-      Color: "; 110 110 130"
-      Size (m): 0.05
-      Style: Points
+      Color Transformer: AxisColor
+      Axis: Z
+      Autocompute Value Bounds: true
+      Size (m): 0.25
+      Style: Flat Squares
       Enabled: true
     # --- Vector (lanelet2) map ---
     - Class: rviz_default_plugins/MarkerArray
