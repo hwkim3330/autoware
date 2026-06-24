@@ -51,6 +51,17 @@ MAP_OSM = os.environ.get("LANELET_OSM", "/root/autoware_map/Town01/lanelet2_map.
 # CARLA spawn "x, y, z, roll, pitch, yaw" (CARLA coords) -- for the respawn cmd
 CARLA_SPAWN = os.environ.get("CARLA_SPAWN", "")
 RVIZ_DISPLAY = os.environ.get("RVIZ_DISPLAY", ":1")
+# Map geo-origin (lat,lon) + site name so the tablet can place the local map-frame
+# ego on a real OpenStreetMap basemap. Set by the OSM/real-map bring-up.
+#   NIRO_ORIGIN="lat,lon"   NIRO_SITE="soongsil"
+def _parse_origin():
+    o = os.environ.get("NIRO_ORIGIN", "")
+    try:
+        la, lo = [float(v) for v in o.split(",")[:2]]
+        return {"lat": la, "lon": lo, "site": os.environ.get("NIRO_SITE", "")}
+    except Exception:
+        return None
+MAP_ORIGIN = _parse_origin()
 MESH_DIR = "/opt/autoware/share/sample_vehicle_description/mesh"
 
 SENSOR_PARTS = {
@@ -168,6 +179,14 @@ class Bridge(Node):
         self.create_subscription(_Str, "/multimode/mode",
                                  lambda m: self._set("mmode", m), 1)
         self.pub_inject = self.create_publisher(_Str, "/multimode/inject", 1)
+        # Niro multimode telemetry (단일 Ouster OS2-128 + RTK-GNSS 이중측위).
+        # niro_bridge runs the Niro-spec Pose Merger live on the CARLA topics.
+        self.create_subscription(_Str, "/niro/multimode/status",
+                                 lambda m: self._set("niro_status", m), 1)
+        self.create_subscription(_Str, "/niro/multimode/transition_event",
+                                 lambda m: self._set("niro_event", m), 5)
+        from std_msgs.msg import Bool as _Bool
+        self.pub_niro_fault = self.create_publisher(_Bool, "/test/fault_injection/lidar", 1)
         # ROii 4-LiDAR experimental layer
         self.create_subscription(_Str, "/roii/lidar_health",
                                  lambda m: self._set("roii_health", m), 1)
@@ -199,6 +218,13 @@ class Bridge(Node):
         from sensor_msgs.msg import PointCloud2
         self.create_subscription(PointCloud2, "/localization/util/downsample/pointcloud",
                                  self._lidar_tick, be)
+        # front-camera frames for the tablet popup (YOLOX overlay if running, else
+        # the raw camera). Throttled + downscaled + JPEG-encoded in the callback;
+        # the camera_producer() coroutine ships the latest frame at ~6 Hz.
+        self._jpg = None; self._jpg_t = 0.0
+        from sensor_msgs.msg import Image as _Img
+        for topic in ("/tensorrt_yolox/out/image", "/sensing/camera/camera0/image_rect_color"):
+            self.create_subscription(_Img, topic, self._cam_cb, be)
         # per-LiDAR liveness (ROii 4-lidar suite; in 1-lidar mode only front maps)
         self.lidar_part_t = {k: [] for k in
                              ("front", "rear", "side_left", "side_right")}
@@ -206,11 +232,25 @@ class Bridge(Node):
             self.create_subscription(
                 PointCloud2, f"/sensing/lidar/{key}/pointcloud_before_sync",
                 (lambda k: lambda m: self._part_tick(k))(key), be)
+        # Detected objects for the tablet map. Two sources, whichever is live:
+        #  - full perception (PERCEPTION=1): /perception/object_recognition/objects
+        #    = tracked+predicted PredictedObjects (map frame, classified).
+        #  - opt-in CenterPoint (CENTERPOINT=1): /perception/centerpoint/objects
+        #    = DetectedObjects in base_link.
+        try:
+            from autoware_perception_msgs.msg import DetectedObjects
+            self.create_subscription(DetectedObjects, "/perception/centerpoint/objects",
+                                     lambda m: self._set("objs", m), be)
+            self.create_subscription(PredictedObjects, "/perception/object_recognition/objects",
+                                     lambda m: self._set("pobjs", m), be)
+        except Exception:
+            pass
         cbg = ReentrantCallbackGroup()
         self.cli_clear = self.create_client(ClearRoute, "/api/routing/clear_route", callback_group=cbg)
         self.cli_route = self.create_client(SetRoutePoints, "/api/routing/set_route_points", callback_group=cbg)
         self.cli_auto = self.create_client(ChangeOperationMode, "/api/operation_mode/change_to_autonomous", callback_group=cbg)
         self.cli_stop = self.create_client(ChangeOperationMode, "/api/operation_mode/change_to_stop", callback_group=cbg)
+        self._emergency = False   # set by trigger_emergency, cleared by heal/drive
         self.create_timer(0.5, self._process_cmds, callback_group=cbg)
         # ---- manual teleop (joystick) ----
         # External (manual joystick) control path: gate EXTERNAL + unpause, then
@@ -222,6 +262,14 @@ class Bridge(Node):
         self.pub_ctrl = self.create_publisher(Control, "/control/command/control_cmd", 1)
         self.pub_gate = self.create_publisher(GateMode, "/control/gate_mode_cmd", 1)
         self.pub_gear = self.create_publisher(GearCommand, "/control/command/gear_cmd", 1)
+        # Manual control bypasses the cmd_gate by publishing actuation directly to
+        # the CARLA interface (verified to move the ego). Reverse uses a dedicated
+        # latch the gate can't override (gear_cmd is contended by the gate's PARK).
+        from tier4_vehicle_msgs.msg import ActuationCommandStamped as _Act
+        from std_msgs.msg import Bool as _Bool
+        self.pub_act = self.create_publisher(_Act, "/control/command/actuation_cmd", 1)
+        self.pub_manrev = self.create_publisher(_Bool, "/roii/manual_reverse", 1)
+        self._Act, self._Bool = _Act, _Bool
         self.cli_pause = self.create_client(SetPause, "/control/vehicle_cmd_gate/set_pause", callback_group=cbg)
         self.teleop = {"v": 0.0, "steer": 0.0, "until": 0.0}
         self._teleop_armed = False
@@ -249,7 +297,14 @@ class Bridge(Node):
             self._arm_teleop()
 
     def _carla_ego(self):
-        """Lazy CARLA client + ego handle for direct manual control."""
+        """Lazy CARLA client + ego handle for direct manual control.
+
+        Reverse only works when this returns the actor; if it returns None the
+        manual loop is skipped and the Autoware chain just BRAKES on negative
+        velocity (no backward motion). So the lookup must be robust: accept
+        several role_names, fall back to the sole vehicle, and -- crucially --
+        wait_for_tick() because a second sync-mode client's get_actors() can come
+        back empty until the world ticks."""
         try:
             import carla
             if not hasattr(self, "_carla_cl"):
@@ -257,12 +312,26 @@ class Bridge(Node):
                 self._carla_cl.set_timeout(5.0)
                 self._carla_mod = carla
             ego = getattr(self, "_carla_ego_a", None)
-            if ego is None or not ego.is_alive:
-                ego = next((a for a in self._carla_cl.get_world().get_actors().filter("vehicle.*")
-                            if a.attributes.get("role_name") == "ego_vehicle"), None)
-                self._carla_ego_a = ego
+            if ego is not None and ego.is_alive:
+                return ego
+            world = self._carla_cl.get_world()
+            try:
+                world.wait_for_tick(2.0)   # sync-mode: actors empty until a tick
+            except Exception:
+                pass
+            vehicles = list(world.get_actors().filter("vehicle.*"))
+            ego = next((a for a in vehicles
+                        if a.attributes.get("role_name") in ("ego_vehicle", "hero", "ego")), None)
+            if ego is None and len(vehicles) == 1:
+                ego = vehicles[0]            # only one vehicle -> it's the ego
+            self._carla_ego_a = ego
+            if ego is None:
+                self.get_logger().warn(
+                    f"_carla_ego: no ego among {len(vehicles)} vehicles "
+                    f"(roles={[a.attributes.get('role_name') for a in vehicles]}) -- reverse disabled")
             return ego
-        except Exception:
+        except Exception as e:
+            self.get_logger().warn(f"_carla_ego error: {e}")
             return None
 
     def _carla_loop(self):
@@ -306,9 +375,26 @@ class Bridge(Node):
         g = GearCommand(); g.stamp = now
         g.command = 20 if tp["v"] < -0.01 else 2
         self.pub_gear.publish(g)
-        # Direct CARLA control happens in a DEDICATED thread (_carla_loop):
-        # libcarla is not thread-safe; calling it from the 100 Hz reentrant
-        # executor timer caused silent SIGSEGV crashes of the gateway.
+        rev = tp["v"] < -0.05
+        # Dedicated reverse latch -> interface (gear_cmd is overridden by the
+        # gate's PARK, so this is what actually flips CARLA into reverse).
+        b = self._Bool(); b.data = bool(rev); self.pub_manrev.publish(b)
+        # Publish actuation DIRECTLY to the interface (bypasses the cmd_gate,
+        # which parks/brakes when not engaged). accel for forward; for reverse
+        # send brake_cmd -- the interface's reverse patch maps brake->throttle
+        # when the reverse latch is set. Verified to move the ego both ways.
+        mag = min(abs(tp["v"]) / 6.0, 1.0) * 0.6
+        a = self._Act(); a.header.stamp = now
+        if abs(tp["v"]) < 0.05:
+            a.actuation.accel_cmd = 0.0; a.actuation.brake_cmd = 0.4
+        elif rev:
+            a.actuation.accel_cmd = 0.0; a.actuation.brake_cmd = mag
+        else:
+            a.actuation.accel_cmd = mag; a.actuation.brake_cmd = 0.0
+        a.actuation.steer_cmd = tp["steer"]
+        self.pub_act.publish(a)
+        # Direct CARLA control also runs in a DEDICATED thread (_carla_loop) as a
+        # backup; libcarla is not thread-safe so it must not be called here.
 
     def _set(self, k, m):
         with self.lock:
@@ -343,6 +429,34 @@ class Bridge(Node):
             self.lidar_t.append(now)
             self.lidar_t = [t for t in self.lidar_t if now - t < 3.0]
 
+    def _cam_cb(self, m):
+        # throttle ~6 Hz; downscale to ~360 px wide; JPEG-encode for the tablet.
+        now = time.monotonic()
+        if now - self._jpg_t < 0.16:
+            return
+        try:
+            import numpy as np, cv2, base64
+            h, w = m.height, m.width
+            buf = np.frombuffer(bytes(m.data), dtype=np.uint8)
+            if m.encoding in ("rgb8", "bgr8"):
+                img = buf.reshape((h, w, 3))
+                if m.encoding == "rgb8":
+                    img = img[:, :, ::-1]
+            elif m.encoding in ("bgra8", "rgba8"):
+                img = buf.reshape((h, w, 4))[:, :, :3]
+                if m.encoding == "rgba8":
+                    img = img[:, :, ::-1]
+            else:
+                return
+            tw = 360; th = max(1, int(h * tw / max(1, w)))
+            small = cv2.resize(img, (tw, th), interpolation=cv2.INTER_AREA)
+            ok, jpg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 55])
+            if ok:
+                self._jpg = base64.b64encode(jpg.tobytes()).decode("ascii")
+                self._jpg_t = now
+        except Exception:
+            pass
+
     def enqueue(self, cmd):
         # Latest intent wins: a new command REPLACES anything still queued
         # (taps piling up made the gateway feel unresponsive for minutes).
@@ -368,20 +482,26 @@ class Bridge(Node):
             elif cmd == "respawn":
                 self._respawn()
             elif cmd == "fail_lidar":
-                from std_msgs.msg import String as _Str
+                from std_msgs.msg import String as _Str, Bool as _Bool
                 self.pub_inject.publish(_Str(data="lidar_fail"))
+                self.pub_niro_fault.publish(_Bool(data=True))   # Niro bridge fallback
                 self._res("FAULT INJECTED: lidar -> multimode fallback")
             elif isinstance(cmd, tuple) and cmd[0] == "roii_fault":
                 from std_msgs.msg import String as _Str
                 self.pub_roii_fault.publish(_Str(data=cmd[1]))
                 self._res(f"roii fault cmd: {cmd[1][:60]}")
             elif cmd == "trigger_emergency":
-                # Phase B: placeholder -- wire the actual fail-safe target in
-                # Phase C (configurable topic/service).
-                self._res("trigger_emergency: not wired (Phase C)")
+                # Controlled emergency stop: switch the operation mode to STOP
+                # (the ADAPI-blessed hard stop). Latch _emergency so the frame
+                # reports it to the tablet as a red banner until healed/driven.
+                self._emergency = True
+                self._call(self.cli_stop, ChangeOperationMode.Request(), timeout=6.0)
+                self._res("EMERGENCY STOP")
             elif cmd == "heal":
-                from std_msgs.msg import String as _Str
+                from std_msgs.msg import String as _Str, Bool as _Bool
                 self.pub_inject.publish(_Str(data="clear"))
+                self.pub_niro_fault.publish(_Bool(data=False))   # Niro bridge clear
+                self._emergency = False
                 self._res("fault cleared -> auto mode selection")
             elif isinstance(cmd, tuple) and cmd[0] == "vehicle":
                 self._vehicle(cmd[1])
@@ -405,6 +525,7 @@ class Bridge(Node):
         return fut.result()
 
     def _drive(self):
+        self._emergency = False    # a new drive clears a prior emergency stop
         with self.lock:
             od = self.s.get("odom")
         if not od:
@@ -412,36 +533,48 @@ class Bridge(Node):
         o = od[0].pose.pose
         ex, ey, q = o.position.x, o.position.y, o.orientation
         eyaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
-        # candidate goals 40-90m AHEAD (within ~70 deg of heading), nearest first.
-        # Ahead-on-lane goals route reliably; keeping few + nearest keeps drive fast
-        # even on large maps (Town04 ~17k centerline points).
-        cand = []
+        # candidate goals AHEAD (within ~75 deg of heading), nearest first.
+        # Wide distance band (25-160m): on some maps the only routable goal is
+        # close (short lanes/junctions, e.g. Town02) or far (long straights,
+        # e.g. Town05/Town10HD), so we no longer assume one sweet spot.
+        ahead, anyd = [], []
         for x, y, tg in self.centerlines:
             d = math.hypot(x - ex, y - ey)
-            if 40 < d < 90:
-                ang = math.atan2(y - ey, x - ex)
-                if abs((ang - eyaw + math.pi) % (2 * math.pi) - math.pi) < 1.3:
-                    cand.append((d, x, y, tg))
-        cand.sort()
-        if not cand:
-            # some lanelets store centerline points reversed vs travel direction
-            # -> "ahead" filter yields nothing. Fall back to any-direction goals;
-            # allow_goal_modification + the mission planner sort out routability.
-            cand = sorted((math.hypot(x - ex, y - ey), x, y, tg)
-                          for x, y, tg in self.centerlines
-                          if 40 < math.hypot(x - ex, y - ey) < 90)
-        # prefer a few farther goals first (a meaningful drive), then nearer ones
-        order = cand[len(cand) // 3: len(cand) // 3 + 4] + cand[:4]
-        self._res(f"finding route ({len(cand)} cand)")
+            if not (25 < d < 160):
+                continue
+            anyd.append((d, x, y, tg))
+            ang = math.atan2(y - ey, x - ex)
+            if abs((ang - eyaw + math.pi) % (2 * math.pi) - math.pi) < 1.3:
+                ahead.append((d, x, y, tg))
+        ahead.sort(); anyd.sort()
+
+        # Spread attempts across the band instead of clustering: goals at 55%,
+        # 75%, 35%, 90%... of the sorted distance range, then fill with the rest.
+        # Many maps reject the obvious near goal but accept one farther up the
+        # same road -- so we try generously (these rejects are fast, ~0.3s).
+        def ordered(cand):
+            out, seen, n = [], set(), len(cand)
+            picks = [int(n * f) for f in (0.55, 0.75, 0.35, 0.9, 0.15, 0.5, 0.25, 0.7)]
+            for i in picks + list(range(n)):
+                if 0 <= i < n and i not in seen:
+                    seen.add(i); out.append(cand[i])
+            return out
+
+        # Pass 1: goals AHEAD of the heading (route best when the spawn faces
+        # the lane). Pass 2: ANY-direction goals -- covers spawns whose heading
+        # is anti-parallel to the lane (Town10HD), where every "ahead" point
+        # sits on an unreachable/oncoming lanelet but a behind/side goal routes.
+        self._res(f"finding route ({len(ahead)} ahead / {len(anyd)} any)")
         self._prep_reroute()
-        for d, gx, gy, gtg in order[:5]:
-            # try the stored tangent AND its 180-deg flip: converted maps may
-            # store boundary roles swapped, so the tangent can be anti-parallel
-            # to the lane -- the planner rejects those instantly (cheap retry).
-            for g2 in (gtg, gtg + math.pi):
-                r = self._set_route_to(gx, gy, g2)
-                if (r and r.status.success) or self._route_is_set():
-                    self._engage(gx, gy); return
+        for pool, take in ((ahead, 14), (anyd, 16)):
+            for d, gx, gy, gtg in ordered(pool)[:take]:
+                # try the stored tangent AND its 180-deg flip: converted maps may
+                # store boundary roles swapped, so the tangent can be anti-parallel
+                # to the lane -- the planner rejects those instantly (cheap retry).
+                for g2 in (gtg, gtg + math.pi):
+                    r = self._set_route_to(gx, gy, g2, timeout=6.0)
+                    if (r and r.status.success) or self._route_is_set():
+                        self._engage(gx, gy); return
         # set_route_points can answer late; give the planner a moment, then check.
         time.sleep(2.0)
         if self._route_is_set():
@@ -579,64 +712,72 @@ class Bridge(Node):
         self._res("goto: no routable goal near tap")
 
     def _respawn(self):
-        """Teleport the CARLA ego back to the spawn point and re-seed the
-        localization -- recovers from wall crashes without a full relaunch."""
-        if not CARLA_SPAWN:
-            self._res("respawn: no CARLA_SPAWN configured"); return
-        # 1) STOP + route clear FIRST -- otherwise autonomous keeps driving the
-        #    teleported car away while we re-seed localization.
+        """Recover the ego onto the road after a crash / off-lane drift, without
+        a full relaunch. Tries the validated fixed spawn FIRST (NDT converges
+        reliably there), then the nearest lane centerline as a fallback. NDT can
+        diverge when re-seeded at an arbitrary point, so each target is verified
+        and we move on if it doesn't converge."""
+        # STOP + clear ONCE so autonomous doesn't drive the teleported car away.
         try:
             self._call(self.cli_stop, ChangeOperationMode.Request(), timeout=6.0)
         except Exception:
             pass
         self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
         time.sleep(1.0)
-        try:
-            x, y, z, roll, pitch, yaw = [float(v) for v in CARLA_SPAWN.split(",")]
-            with self._carla_lock:
-                ego = self._carla_ego()
-                if ego is None:
-                    self._res("respawn: ego not found"); return
-                carla = self._carla_mod
-                tf = carla.Transform(carla.Location(x=x, y=y, z=z + 0.3),
-                                     carla.Rotation(roll=roll, pitch=pitch, yaw=yaw))
-                for _ in range(3):   # sync mode can swallow one set_transform
-                    ego.set_target_velocity(carla.Vector3D(0, 0, 0))
-                    ego.set_angular_velocity(carla.Vector3D(0, 0, 0))
-                    ego.set_transform(tf)
-                    time.sleep(0.3)
-            self._res("teleported; re-seeding localization")
-        except Exception as e:
-            self._res(f"respawn error: {e}"); return
-        time.sleep(2.0)   # let the lidar see the new surroundings
-        # 2) initialpose 재시딩 (CARLA -> Autoware: y/yaw 부호 반전), 3회 발행
+        # candidate CARLA poses (x,y,z,roll,pitch,yaw), reliable first
+        cands = []
+        if CARLA_SPAWN:
+            cands.append(("spawn", [float(v) for v in CARLA_SPAWN.split(",")]))
+        with self.lock:
+            od = self.s.get("odom")
+        if od and self.centerlines:
+            o = od[0].pose.pose
+            ex, ey = o.position.x, o.position.y
+            ax, ay, atan = min(self.centerlines,
+                               key=lambda c: math.hypot(c[0] - ex, c[1] - ey))
+            cands.append(("nearest-lane", (ax, -ay, 0.5, 0.0, 0.0, -math.degrees(atan))))
+        if not cands:
+            self._res("respawn: no spawn and no lane/odom"); return
+        for label, t in cands:
+            self._res(f"recovering via {label}...")
+            if self._teleport_to(*t):
+                self._res(f"respawn OK ({label}) -- on lane, ready to DRIVE"); return
+        self._res("respawn: localization did not converge (try DRIVE or relaunch)")
+
+    def _teleport_to(self, x, y, z, roll, pitch, yaw):
+        """Recover to a CARLA pose by publishing /initialpose. The CARLA
+        interface OWNS the ego and ticks the sim, so its initialpose_callback
+        does the actual set_transform (a secondary client's set_transform is
+        swallowed in sync mode -- that's what made earlier respawns diverge).
+        This is exactly how the bring-up seeds localization, so NDT converges.
+        Returns True iff NDT settles within 5 m. (x,y,z,...) are CARLA coords."""
+        ax, ay = x, -y                 # CARLA -> Autoware (map frame) y-flip
+        awyaw = math.radians(-yaw)     # yaw-flip
         from geometry_msgs.msg import PoseWithCovarianceStamped
         if not hasattr(self, "pub_init"):
             self.pub_init = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 1)
             time.sleep(0.5)
-        awyaw = math.radians(-yaw)
         for _ in range(3):
             m = PoseWithCovarianceStamped()
             m.header.frame_id = "map"
             m.header.stamp = self.get_clock().now().to_msg()
-            m.pose.pose.position.x = x
-            m.pose.pose.position.y = -y
+            m.pose.pose.position.x = ax
+            m.pose.pose.position.y = ay
             m.pose.pose.orientation.z = math.sin(awyaw / 2)
             m.pose.pose.orientation.w = math.cos(awyaw / 2)
             m.pose.covariance[0] = m.pose.covariance[7] = 0.25
             m.pose.covariance[35] = 0.068
             self.pub_init.publish(m)
             time.sleep(1.5)
-        # 3) 수렴 확인
-        for i in range(10):
+        for _ in range(10):
             time.sleep(1.0)
             with self.lock:
                 od = self.s.get("odom")
             if od:
                 p = od[0].pose.pose.position
-                if math.hypot(p.x - x, p.y - (-y)) < 5.0:
-                    self._res("respawn OK -- at spawn, ready"); return
-        self._res("respawn: teleported but localization not converged (try again)")
+                if math.hypot(p.x - ax, p.y - ay) < 5.0:
+                    return True
+        return False
 
     def _set_maxvel(self, kmh):
         """Runtime cruise-speed change (no re-launch): set max_vel on the nodes
@@ -712,6 +853,39 @@ class Bridge(Node):
                    "z": round(o.position.z, 2), "yawDeg": round(math.degrees(yaw), 1),
                    "speedKmh": round(math.hypot(v.x, v.y) * 3.6, 1)}
             converged = True
+        # detected objects for the map. Prefer full-perception tracked objects
+        # (PredictedObjects, already in map frame); fall back to CenterPoint
+        # (DetectedObjects in base_link -> transform via the ego pose).
+        objects = []
+        if fresh("pobjs", 1.5):
+            for ob in s["pobjs"][0].objects[:40]:
+                p = ob.kinematics.initial_pose_with_covariance.pose
+                oq = p.orientation
+                oyaw = math.atan2(2 * (oq.w * oq.z + oq.x * oq.y),
+                                  1 - 2 * (oq.y * oq.y + oq.z * oq.z))
+                cls = (max(ob.classification, key=lambda c: c.probability).label
+                       if ob.classification else 0)
+                d = ob.shape.dimensions
+                objects.append({"x": round(p.position.x, 1), "y": round(p.position.y, 1),
+                                "yaw": round(math.degrees(oyaw)), "cls": int(cls),
+                                "sx": round(max(d.x, 0.5), 1), "sy": round(max(d.y, 0.5), 1)})
+        elif converged and fresh("objs", 1.0):
+            ca, sa = math.cos(yaw), math.sin(yaw)
+            for ob in s["objs"][0].objects[:40]:
+                p = ob.kinematics.pose_with_covariance.pose
+                lx, ly = p.position.x, p.position.y
+                wx = ego["x"] + lx * ca - ly * sa
+                wy = ego["y"] + lx * sa + ly * ca
+                oq = p.orientation
+                oyaw = math.atan2(2 * (oq.w * oq.z + oq.x * oq.y),
+                                  1 - 2 * (oq.y * oq.y + oq.z * oq.z))
+                cls = (max(ob.classification, key=lambda c: c.probability).label
+                       if ob.classification else 0)
+                d = ob.shape.dimensions
+                objects.append({"x": round(wx, 1), "y": round(wy, 1),
+                                "yaw": round(math.degrees(yaw + oyaw)),
+                                "cls": int(cls),
+                                "sx": round(max(d.x, 0.5), 1), "sy": round(max(d.y, 0.5), 1)})
         loc_init = s["loc"][0].state if "loc" in s else 0
         op = s["op"][0].mode if "op" in s else 0
         op_avail = bool(s["op"][0].is_autonomous_mode_available) if "op" in s else False
@@ -729,6 +903,8 @@ class Bridge(Node):
             mm = s["mrm"][0]
             if getattr(mm, "state", 0) not in (0, 1):   # not NORMAL
                 mrm = {2: "MRM_OPERATING", 3: "MRM_SUCCEEDED", 4: "MRM_FAILED"}.get(mm.state, "MRM")
+        if self._emergency:           # manual emergency stop overrides
+            mrm = "EMERGENCY STOP"
         planned_kmh = 0.0
         if "traj" in s and fresh("traj", 5) and s["traj"][0].points:
             planned_kmh = round(s["traj"][0].points[0].longitudinal_velocity_mps * 3.6, 1)
@@ -757,10 +933,41 @@ class Bridge(Node):
         if not any_part:  # 1-lidar mode: report the single pipeline
             parts = {"FrontCenterLidar": "OK" if lidar_ok else "FAULT"}
             faults = [] if lidar_ok else ["FrontCenterLidar"]
+        # Niro multimode telemetry (이중측위): live Pose Merger weights + sensors +
+        # last transition event from niro_bridge (/niro/multimode/*).
+        niro = None
+        if "niro_status" in s and fresh("niro_status", 3):
+            try:
+                niro = json.loads(s["niro_status"][0].data)
+                if "niro_event" in s and fresh("niro_event", 8):
+                    niro["lastEvent"] = json.loads(s["niro_event"][0].data)
+            except Exception:
+                niro = None
+        # live system monitor (실시간 노드/토픽 상태) -- node count cached ~4s
+        nowt = time.time()
+        if nowt - getattr(self, "_nodes_t", 0) > 4:
+            try:
+                self._nodes_cache = len(self.get_node_names())
+            except Exception:
+                self._nodes_cache = 0
+            self._nodes_t = nowt
+        system = {
+            "nodes": getattr(self, "_nodes_cache", 0),
+            "topics": [
+                {"n": "localization", "ok": bool(converged), "v": f"{ndt_hz:.0f} Hz"},
+                {"n": "planning", "ok": ntraj > 0, "v": f"{ntraj} pts"},
+                {"n": "control", "ok": op == 2, "v": "AUTO" if op == 2 else "STOP"},
+                {"n": "route", "ok": rstate in (2, 4), "v": ROUTE_STATE.get(rstate, "?")},
+                {"n": "vehicle", "ok": fresh("steer"), "v": f"{steer_deg:.0f}°"},
+            ],
+        }
         return {
             "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "source": "AUTOWARE_LIVE",
+            "site": MAP_ORIGIN,
             "ego": ego,
+            "niro": niro,
+            "system": system,
             "localization": {"converged": converged and (loc_init == 3), "initState": loc_init,
                              "mode": (s["mmode"][0].data if "mmode" in s
                                       else ("LIDAR_GNSS" if lidar_ok else "UNAVAILABLE")),
@@ -773,6 +980,7 @@ class Bridge(Node):
                         "plannedKmh": planned_kmh},
             "roii": (json.loads(s["roii_health"][0].data)
                      if "roii_health" in s and fresh("roii_health", 3) else None),
+            "objects": objects,
             "sensors": sensors, "parts": parts, "faults": faults,
             "sensorSuite": {"lidars": len(ROII_LIDARS), "radars": len(ROII_RADARS),
                             "simulated": 4, "cameras": 0},
@@ -815,10 +1023,23 @@ async def handler(ws):
                 elif cmd == "map":
                     # map switch needs a full re-launch (host side). Write a
                     # request file that scripts/map_switch_daemon.sh acts on.
+                    # The gateway runs INSIDE the container whose /tmp is NOT
+                    # shared with the host -- route the request through the
+                    # autoware_map bind mount (/root/autoware_map <-> host
+                    # /home/kim/autoware_map), which the daemon watches.
                     town = str(data.get("town", "Town04"))
-                    if town.replace("Town", "").replace("HD", "").isdigit():
-                        open("/tmp/roii_map_request", "w").write(town)
-                        BRIDGE.last_cmd_result = f"map switch -> {town} (재기동, ~4분)"
+                    # accept CARLA Towns AND real-map sites (pangyo_crd/pangyo_ngii/
+                    # soongsil/kcity); the daemon routes real sites to planning_sim.
+                    _real = ("pangyo", "soongsil", "kcity")
+                    if town.replace("Town", "").replace("HD", "").isdigit() \
+                       or any(town.startswith(s) for s in _real):
+                        for p in ("/root/autoware_map/.roii_map_request",
+                                  "/tmp/roii_map_request"):
+                            try:
+                                open(p, "w").write(town)
+                            except OSError:
+                                pass
+                        BRIDGE.last_cmd_result = f"map switch -> {town} (재기동, ~3분)"
                         print(f"[cmd] map -> {town}")
                 elif cmd == "fault":
                     import json as _json
@@ -853,6 +1074,22 @@ async def producer():
         await asyncio.sleep(0.5)
 
 
+async def camera_producer():
+    # ship the latest front-camera JPEG to the tablet at ~6 Hz (separate from the
+    # 2 Hz state frame so the surround/HUD stay responsive).
+    last = 0.0
+    while True:
+        try:
+            jpg = BRIDGE._jpg if BRIDGE else None
+            if jpg and CLIENTS and BRIDGE._jpg_t != last:
+                last = BRIDGE._jpg_t
+                msg = json.dumps({"type": "camera", "jpg": jpg})
+                await asyncio.gather(*[c.send(msg) for c in list(CLIENTS)], return_exceptions=True)
+        except Exception as e:
+            print("cam tick error:", e)
+        await asyncio.sleep(0.16)
+
+
 def spin_ros(bridge):
     ex = MultiThreadedExecutor(num_threads=4)
     ex.add_node(bridge)
@@ -869,7 +1106,7 @@ async def main():
     print(f"  ws://<host>:{WS_PORT}{WS_PATH}   (USB: adb reverse tcp:{WS_PORT} tcp:{WS_PORT})")
     print("=" * 56)
     async with websockets.serve(handler, WS_HOST, WS_PORT):
-        await producer()
+        await asyncio.gather(producer(), camera_producer())
 
 
 if __name__ == "__main__":

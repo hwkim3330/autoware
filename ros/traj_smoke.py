@@ -115,14 +115,19 @@ def main():
         print("SMOKE: OK (localized; auto-goal not routable at this spawn)")
         sys.exit(0)
     t0 = time.time()
+    best = 0
     while time.time() - t0 < 60:
         rclpy.spin_once(n, timeout_sec=0.2)
-        if box["traj"] > 50:
+        best = max(best, box["traj"])
+        # ANY non-trivial trajectory means the behavior/motion chain is alive.
+        # City routes (Town10HD) are short -> far fewer points than a highway
+        # (Town04 ~150); >10 is enough to prove the stack can plan & drive.
+        if box["traj"] > 10:
             call(clr, ClearRoute.Request(), 5)
             print(f"SMOKE: OK trajectory {box['traj']} pts")
             sys.exit(0)
     call(clr, ClearRoute.Request(), 5)
-    print("SMOKE: route set but NO trajectory (poisoned stack)")
+    print(f"SMOKE: route set but NO trajectory (best={best} pts, poisoned stack)")
     sys.exit(1)
 
 

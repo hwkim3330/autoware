@@ -33,11 +33,20 @@ cd ~/autoware-keti
 | `./run.sh app` | 태블릿 앱 빌드+설치+USB 연결 |
 | `./run.sh test` | 전 타운 자율주행 검증 (~40분, 결과 docs/town_test_results.md) |
 | `./run.sh status` / `kill` | 프로세스 상태 / 전부 정리 |
-| `LIDARS=4 ./run.sh ...` | ROii 4라이다 실험 모드 (센싱 검증·planning은 업스트림 버그로 차단, docs 참고) |
+| `./run.sh roii low [TownXX]` | ROii 4라이다 자율주행 (front/rear G32 + L/R Pandar, ~25 km/h 검증) |
+| `CENTERPOINT=1 ./run.sh roii low [TownXX]` | 4라이다 + GPU CenterPoint 객체검출 (concat→/perception/centerpoint/objects) |
+| `YOLOX=1 ./run.sh roii low [TownXX]` | 전방 카메라 + GPU YOLOX 보행자/차량 2D 검출 (→detection/rois0; 보행자 label 7 ~0.88) |
+| `./run.sh replay [bag] [town]` | ROS2 bag 리플레이 (게이트웨이+rviz, 태블릿에 재생; 루프) |
+| `./run.sh mapdaemon` | 태블릿 맵-전환 데몬 (탭으로 맵 바꾸려면 상시 실행) |
 
-**태블릿**: USB 연결 후 앱 실행 — DRIVE 버튼 또는 **지도 탭 = 그 지점으로 자율주행**.
-수동운전: 독의 게임패드 아이콘 → 조이스틱/기울기(TILT) 조향 + ACCEL/REVERSE 페달.
-Wi-Fi는 독의 ⚙에서 `ws://<PC-IP>:8765/ws`.
+**태블릿** (ROii Command, `com.keti.roii.command`): USB 연결 후 앱 실행 — DRIVE 버튼
+또는 **지도 탭 = 그 지점으로 자율주행**. 수동운전: 독의 게임패드 아이콘 → 조이스틱/기울기(TILT)
+조향 + ACCEL/REVERSE 페달. Wi-Fi는 독의 ⚙에서 `ws://<PC-IP>:8765/ws`.
+
+**맵 전환 (태블릿에서 8개 타운)**: ⚙ 설정 → 타운 선택 → 그 맵으로 풀 재기동(~4분) →
+태블릿에 새 맵 표시. **단, PC에서 `./run.sh mapdaemon`이 상시 실행돼 있어야 함** (게이트웨이는
+컨테이너 안에서 돌고 컨테이너 `/tmp`는 호스트와 공유 안 됨 → 데몬이 `docker exec`로 요청을
+읽어 재기동). 자율주행 검증된 타운(01/04/06/07)은 앱에서 초록 표시.
 
 Verified: route SET → trajectory 150+ pts → AUTONOMOUS → up to ~28 km/h
 lane-following (cap `max_vel: 8.33`). The car is driven end-to-end by Autoware
@@ -57,6 +66,14 @@ same gateway/tablet tap-to-go; MGRS maps supported).
 | engage "target mode not available" | trajectory (and availability) appears 2-3 s after the route | gateway retries engage 10×2 s |
 | CARLA segfault / RPC starvation | Autoware startup burst starves CARLA | CPU partition: CARLA `taskset 0,8` (one HT pair), container `1-7,9-15` |
 | ros2 CLI false negatives | SHM port lock race across ~100 nodes | UDP-only Fast-DDS profile |
+| route empty even on-lane (urban) | `find_spawn` picks the *longest* lane, which in dense maps can be an isolated lanelet (no routing-graph successors) | connectivity-aware spawn: BFS reachability over lanelet successors, pick highest-reach near a localizing spot (Town10HD→ll2710) |
+| tablet map switch did nothing | gateway runs in container; its `/tmp` isn't host-shared & `autoware_map` mount is read-only → request file never reached host daemon | `map_switch_daemon.sh` reads request via `docker exec` (`./run.sh mapdaemon`) |
+
+**Town10HD (도심HD) not drivable — map-data bug, not the stack.** Localization +
+routing work (route SETs), but its `lanelet2_map.pyc`-generated osm makes
+`route_handler` log `invalid version map` and crash in `createMapSegments` →
+behavior_path 0 pts → no trajectory. Needs a proper lanelet2 map regen. Drivable
+city demo = **Town01**.
 
 Re-routing works: tap a new destination any number of times mid-session. (The
 behavior_planning container is launched single-threaded — `component_container`
@@ -82,16 +99,24 @@ app/, webapp/, desktop/, launch/   earlier gateway/app/launcher experiments (kep
 
 ## Tablet app
 
-Live app: `/home/kim/roii_autoware_monitor` — Tesla Model 3/Y layout: left
-panel (PRND strip, big speed, AUTOPILOT pill, 3D ROii), full-bleed dark nav map
-(grey lane network, Tesla-blue planned route, red destination pin; **tap the map
-to auto-drive there**), bottom icon dock (ROii architecture screen, manual
-joystick, Drive / Stop / Clear).
+Live app: `/home/kim/roii_command` (`com.keti.roii.command`) — Tesla-style
+light/white dashboard (design language from github.com/hwkim3330/tabsla):
+- **left**: a live 3D autopilot surround (Three.js WebView) — the **ROii 3D
+  model** (roii.glb, served over a localhost HTTP server) on a daytime road with
+  the planned-path ribbon and CenterPoint objects as class-coloured 3D models
+  (car=blue, truck=amber; pedestrians are NOT drawn — CenterPoint false-positives
+  guardrails as people). HUD: PRND, big thin speed, AUTOPILOT/READY/MANUAL pill.
+- **right**: light nav map — white roads, Tesla-blue route, **tap to auto-drive**.
+- **MANUAL** mode: steer joystick / tilt-steer + ACCEL/REVERSE pedals (teleop).
+- **camera popup**: live front-camera JPEG (with the YOLOX overlay) streamed from
+  the gateway — only when `YOLOX=1` is running.
+- **bottom bar**: Drive / Stop / Clear / Emergency + live ROUTE / TRAJ / NDT / OBJ.
 
 ```bash
-cd /home/kim/roii_autoware_monitor
+cd /home/kim/roii_command
+export PATH="$PATH:/home/kim/flutter/bin"
 flutter build apk --release && adb install -r build/app/outputs/flutter-apk/app-release.apk
-adb reverse tcp:8765 tcp:8765
+adb reverse tcp:8765 tcp:8765       # or set ws://<PC-IP>:8765/ws for Wi-Fi
 ```
 
 Older versions archived in `backup/app-versions/` (v1 = original PLEOS

@@ -120,15 +120,32 @@ class carla_ros2_interface(object):
         self.sub_vehicle_initialpose = self.ros2_node.create_subscription(
             PoseWithCovarianceStamped, "initialpose", self.initialpose_callback, 1
         )
-        # KETI patch: reverse gear support. The stock interface hardcodes DRIVE;
-        # listen to the gear command and flip CARLA's reverse flag (gear 20 = R).
+        # KETI patch: reverse gear support. The stock interface hardcodes DRIVE.
+        # gear_cmd alone is unreliable for manual reverse: the cmd_gate also
+        # publishes gear_cmd (PARK=22 when not engaged), overriding the tablet's
+        # REVERSE=20 -> _reverse never latches. So reverse is OR'd from a
+        # DEDICATED, un-contended topic the gateway owns (/roii/manual_reverse).
         from autoware_vehicle_msgs.msg import GearCommand as _GearCommand
+        from std_msgs.msg import Bool as _Bool
         self._reverse = False
+        self._gear_reverse = False
+        self._manual_reverse = False
         self.sub_gear = self.ros2_node.create_subscription(
             _GearCommand, "/control/command/gear_cmd",
-            lambda m: setattr(self, "_reverse", m.command == 20), 1
+            lambda m: self._set_rev(gear=m.command == 20), 1
+        )
+        self.sub_manrev = self.ros2_node.create_subscription(
+            _Bool, "/roii/manual_reverse",
+            lambda m: self._set_rev(manual=m.data), 1
         )
         self.current_control = carla.VehicleControl()
+
+    def _set_rev(self, gear=None, manual=None):
+        if gear is not None:
+            self._gear_reverse = gear
+        if manual is not None:
+            self._manual_reverse = manual
+        self._reverse = self._gear_reverse or self._manual_reverse
 
     def _load_sensor_configuration(self):
         """Load sensor configuration and prepare publishers/metadata."""

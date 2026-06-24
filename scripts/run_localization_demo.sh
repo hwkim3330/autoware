@@ -44,7 +44,7 @@ case "$TOWN" in
   Town05)   SPAWN="-184.6, -31.8, 0.9, 0.0, 0.0, -90.0" ;;
   Town06)   SPAWN="606.8, 152.4, 0.6, 0.0, 0.0, 0.2" ;;
   Town07)   SPAWN="-31.4, -109.0, 0.6, 0.0, 0.0, -179.8" ;;
-  Town10HD) SPAWN="19.4, -57.4, 0.5, 0.0, 0.0, -180.0" ;;
+  Town10HD) SPAWN="31.6, -60.9, 0.5, 0.0, 0.0, -0.0" ;;
   *)        SPAWN="None" ;;
 esac
 echo "==> Town=$TOWN  aligned spawn=[$SPAWN]"
@@ -71,6 +71,14 @@ seed_initialpose() {
 }
 
 boot_carla() {
+  # Reuse a healthy running CARLA on the same town (REUSE_CARLA=0 to force a
+  # fresh boot). CARLA's boot is flaky and the GPU driver degrades after ~10
+  # crash cycles, so when an instance is already serving RPC on :2000 for this
+  # town we keep it -- a stack re-launch then only touches the Autoware side.
+  if [ "${REUSE_CARLA:-1}" = "1" ] && ss -tlnp 2>/dev/null | grep -q :2000 \
+     && pgrep -f "CarlaUE4-Linux-Shipping $TOWN" >/dev/null 2>&1; then
+    echo "    CARLA already up on :2000 ($TOWN) -- reusing"; return 0
+  fi
   SUDO pkill -9 -f CarlaUE4-Linux-Shipping 2>/dev/null; sleep 4
   for attempt in 1 2 3 4 5; do
     cd "$CARLA_DIR"
@@ -191,7 +199,7 @@ SUDO docker exec autoware bash -lc \
    /opt/autoware/share/autoware_carla_interface/autoware_carla_interface.launch.xml" >/dev/null 2>&1
 
 # Refresh the gateway + perception stub + helper scripts in the container.
-for f in ros_ws_gateway.py perception_stub.py roii_watchdog.py multimode_supervisor.py traj_smoke.py find_spawn.py diag_route.py diag_connectivity.py; do
+for f in ros_ws_gateway.py perception_stub.py roii_watchdog.py multimode_supervisor.py niro_bridge.py traj_smoke.py find_spawn.py diag_route.py diag_connectivity.py; do
   [ -f "$REPO/ros/$f" ] && SUDO docker cp "$REPO/ros/$f" autoware:/root/$f >/dev/null 2>&1
 done
 SUDO docker cp "$REPO/container_patches/roii_clean.rviz" autoware:/root/roii_clean.rviz >/dev/null 2>&1
@@ -219,12 +227,46 @@ SUDO docker exec autoware bash -lc \
 CARLAYAML=/opt/autoware/share/autoware_launch/config/system/diagnostics/autoware-carla.yaml
 SUDO docker exec autoware bash -lc \
   "sed -i '/link: \/autoware\/localization\/accuracy }/d; /link: \/autoware\/localization\/sensor_fusion_status }/d' $CARLAYAML" >/dev/null 2>&1 || true
+# NIRO: the transform_map_to_base_link topic monitor can WEDGE in ERROR after a
+# transient TF gap (route churn during a re-drive) and never recover -- even though
+# map->base_link stays healthy (~20 Hz, ~0.05 s fresh) -- which then gates autonomous
+# availability so the car won't engage. The Niro demo removes that one leaf from the
+# autonomous diagnostic graph (EKF + niro_bridge still monitor localization). CARLA-only.
+if [ "${NIRO:-0}" = "1" ]; then
+  SUDO docker exec autoware bash -lc \
+    "sed -i '\#path: /autoware/localization/topic_rate_check/transform#,/name: localization_topic_status/d' $LOCYAML" >/dev/null 2>&1 || true
+fi
 CTLYAML=/opt/autoware/share/autoware_launch/config/system/diagnostics/control.yaml
 SUDO docker exec autoware bash -lc \
   "sed -i '/link: \/autoware\/control\/topic_rate_check\/trajectory_follower }/d; /link: \/autoware\/control\/topic_rate_check\/control_command }/d; /link: \/autoware\/control\/performance_monitoring\/lane_departure }/d; /link: \/autoware\/control\/performance_monitoring\/control_state }/d' $CTLYAML" >/dev/null 2>&1 || true
+# Lower the NDT convergence threshold for CARLA. The CARLA LiDAR + downsampled
+# pointcloud map match marginally (observed NVTL score ~2.15-2.23 vs the 2.3
+# default), so ndt_scan_matcher SKIPS publishing its pose -> ekf_localizer logs
+# "pose is not updated" -> autonomous mode never becomes available. 1.5 gives
+# margin above the observed score while still rejecting true divergence.
+# (Param is read only at node startup -- must be set before the e2e launch.)
+# NOTE: the launch uses the autoware_launch *override*, not the package default,
+# so edit every ndt_scan_matcher.param.yaml under /opt/autoware/share.
+SUDO docker exec autoware bash -lc \
+  "for f in \$(find /opt/autoware/share -name 'ndt_scan_matcher.param.yaml' 2>/dev/null); do sed -i 's/converged_param_nearest_voxel_transformation_likelihood: .*/converged_param_nearest_voxel_transformation_likelihood: 2.0/' \$f; done" >/dev/null 2>&1 || true
 
-echo "==> [3/5] Clear stale ROS processes (full container restart)"
-SUDO docker restart autoware >/dev/null 2>&1 || true; sleep 6
+echo "==> [3/5] Clear stale ROS processes (stop+start -- NOT docker restart)"
+# CRITICAL: use `docker stop` + `docker start`, NOT `docker restart`. `restart`
+# does NOT re-run the nvidia-container-runtime prestart hook, so it leaves the
+# GPU cgroup stale -> inside the container `nvidia-smi` gives "Failed to
+# initialize NVML" and CUDA nodes (CenterPoint/YOLOX) die with cudaErrorNoDevice
+# (CARLA's Vulkan path survives, which masks it). stop+start re-runs the hook
+# and restores CUDA. stop+start also fully clears detached e2e launches (the old
+# duplicate-stack problem) since the container process tree is torn down.
+restart_container() { SUDO docker stop -t 5 autoware >/dev/null 2>&1; SUDO docker start autoware >/dev/null 2>&1; sleep 6; }
+restart_container
+LEFT=$(SUDO docker exec autoware pgrep -fc e2e_simulator 2>/dev/null | tr -dc 0-9)
+if [ "${LEFT:-0}" != "0" ]; then
+  echo "    stale e2e survived ($LEFT) -- stop+start again"
+  restart_container
+fi
+# verify CUDA is visible (so perception modes work); warn if not
+SUDO docker exec autoware bash -lc 'nvidia-smi -L >/dev/null 2>&1' && echo "    GPU/CUDA OK in container" || echo "    WARN: CUDA not visible (perception will fail) -- container needs recreate"
 
 # A component container occasionally dies DURING startup (rclcpp race under the
 # launch burst); its respawn then deadlocks (behavior waits for scenario,
@@ -238,12 +280,25 @@ for e2etry in 1 2 3; do
     boot_carla || { echo "CARLA failed to boot"; exit 1; }
   fi
   echo "==> [4/5] Launch Autoware e2e (attempt $e2etry)"
+  # PERCEPTION=1 -> bring up the FULL Autoware perception (ground-seg -> CenterPoint
+  # -> tracking -> prediction) feeding planning, instead of the empty stub. lidar
+  # mode (no camera dependency); camera-lidar fusion is a further step.
+  # FUSION=1 implies full perception with camera-lidar fusion (1 front camera).
+  [ "${FUSION:-0}" = "1" ] && PERCEPTION=1
+  PERC="false"
+  if [ "${PERCEPTION:-0}" = "1" ]; then
+    if [ "${FUSION:-0}" = "1" ]; then
+      PERC="true perception_mode:=camera_lidar_fusion lidar_detection_model:=centerpoint image_number:=1 image_topic_name:=image_rect_color"
+    else
+      PERC="true perception_mode:=lidar lidar_detection_model:=centerpoint"
+    fi
+  fi
   SUDO docker exec -d autoware bash -lc \
     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash && \
      ros2 launch autoware_launch e2e_simulator.launch.xml \
      map_path:=/root/autoware_map/$TOWN vehicle_model:=sample_vehicle \
      sensor_model:=carla_sensor_kit simulator_type:=carla carla_map:=$TOWN \
-     timeout:=300 perception:=false rviz:=false launch_system_monitor:=false \
+     timeout:=300 perception:=$PERC rviz:=false launch_system_monitor:=false \
      > /tmp/e2e.log 2>&1"
   sleep 60
   DIED=$(SUDO docker exec autoware bash -lc "grep -ac 'process has died' /tmp/e2e.log" 2>/dev/null | tr -dc 0-9)
@@ -259,17 +314,43 @@ for e2etry in 1 2 3; do
   # behavior_path needs the perception stub (empty objects + clear occupancy
   # grid) to produce ANY trajectory -- it must run BEFORE the smoke test.
   # (Starting it only after the gate made the gate fail unconditionally.)
-  SUDO docker exec autoware bash -c 'pkill -9 -f perception_stub.py; exit 0' >/dev/null 2>&1
-  SUDO docker cp "$REPO/ros/perception_stub.py" autoware:/root/perception_stub.py >/dev/null 2>&1
-  SUDO docker exec -d autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1"
+  # With PERCEPTION=1 the REAL perception provides objects/occupancy -> no stub.
+  if [ "${PERCEPTION:-0}" != "1" ]; then
+    SUDO docker exec autoware bash -c 'pkill -9 -f perception_stub.py; exit 0' >/dev/null 2>&1
+    SUDO docker cp "$REPO/ros/perception_stub.py" autoware:/root/perception_stub.py >/dev/null 2>&1
+    SUDO docker exec -d autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1"
+  else
+    # FULL perception: feed an empty traffic-light signal so the TL topic monitor
+    # is OK (no TL camera in CARLA) -> otherwise it gates AUTONOMOUS availability.
+    # THIS is what lets perception:=true actually drive (verified 0->11 km/h).
+    SUDO docker exec autoware bash -c 'pkill -9 -f traffic_light_stub.py; exit 0' >/dev/null 2>&1
+    SUDO docker cp "$REPO/ros/traffic_light_stub.py" autoware:/root/traffic_light_stub.py >/dev/null 2>&1
+    SUDO docker exec -d autoware bash -lc     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash;      python3 -u /root/traffic_light_stub.py --ros-args -p use_sim_time:=true > /tmp/tlstub.log 2>&1"
+    # FUSION: feed the front camera (/sensing/camera/camera0) + a static
+    # base_link->camera0 TF so perception's camera_lidar_fusion can project
+    # clusters onto the YOLOX rois (perception runs its own yolox + roi fusion).
+    if [ "${FUSION:-0}" = "1" ]; then
+      SUDO docker cp "$REPO/ros/carla_camera_pub.py" autoware:/root/carla_camera_pub.py >/dev/null 2>&1
+      SUDO docker exec autoware bash -c 'pkill -9 -f "carla_camera_pub|static_transform_publisher.*camera0"; exit 0' >/dev/null 2>&1
+      SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 run tf2_ros static_transform_publisher --x 1.5 --y 0 --z 1.6 --qx -0.5 --qy 0.5 --qz -0.5 --qw 0.5 --frame-id base_link --child-frame-id camera0/camera_link > /tmp/camtf.log 2>&1"
+      SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/carla_camera_pub.py --ros-args -p use_sim_time:=true > /tmp/cam.log 2>&1"
+      echo "    FUSION: front camera /sensing/camera/camera0 + TF -> camera_lidar_fusion"
+    fi
+  fi
   if [ -n "${ROII_PROFILE:-}" ]; then
     # the fault injector FEEDS the concatenation (raw -> before_sync); the
     # health monitor watches the post-injector stream. Both precede the smoke.
     SUDO docker exec autoware bash -c 'pkill -9 -f roii_lidar_fault_injector.py; pkill -9 -f roii_lidar_health_monitor.py; exit 0' >/dev/null 2>&1
+    sleep 1   # let the kill settle so a smoke-retry doesn't double-start these
+              # (duplicated_node_checker flags dup names as a system ERROR)
     SUDO docker cp "$REPO/ros/roii_lidar_fault_injector.py" autoware:/root/roii_lidar_fault_injector.py >/dev/null 2>&1
     SUDO docker cp "$REPO/ros/roii_lidar_health_monitor.py" autoware:/root/roii_lidar_health_monitor.py >/dev/null 2>&1
     SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_fault_injector.py --ros-args -p use_sim_time:=true > /tmp/roii_injector.log 2>&1"
     SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_health_monitor.py --ros-args -p use_sim_time:=true > /tmp/roii_monitor.log 2>&1"
+    # NOTE: GPU perception (CenterPoint / YOLOX) is launched AFTER the smoke test
+    # passes (see below), NOT here -- building the TensorRT engine (~60s) during
+    # the localization-convergence window starves NDT and makes the smoke fail
+    # ("no odometry"). Launching it post-smoke keeps bring-up reliable.
   fi
   sleep 30
   # THE acceptance gate: can the stack actually produce a trajectory? Component
@@ -287,6 +368,19 @@ for e2etry in 1 2 3; do
   sleep 5
 done
 
+# Post-smoke: dedupe the ROii helper nodes. Smoke-retries (multiple e2e attempts)
+# double-start the fault_injector/health_monitor -> duplicated_node_checker errors
+# -> it gates AUTONOMOUS availability (car won't engage). Kill all + restart ONE
+# each + bounce the ros2 daemon so stale DDS participants are dropped.
+if [ -n "${ROII_PROFILE:-}" ]; then
+  SUDO docker exec autoware bash -c 'pkill -9 -f "roii_lidar_health_monitor|roii_lidar_fault_injector"; exit 0' >/dev/null 2>&1
+  sleep 3
+  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_fault_injector.py --ros-args -p use_sim_time:=true > /tmp/roii_injector.log 2>&1"
+  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_health_monitor.py --ros-args -p use_sim_time:=true > /tmp/roii_monitor.log 2>&1"
+  SUDO docker exec autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 daemon stop >/dev/null 2>&1; ros2 daemon start >/dev/null 2>&1" >/dev/null 2>&1
+  echo "    ROii nodes deduped (1 fault_injector + 1 health_monitor) -> no duplicated_node_checker gate"
+fi
+
 echo "==> [5/5] Waiting for localization to converge..."
 # (initialpose already seeded inside the e2e retry loop)
 sleep 30
@@ -297,6 +391,25 @@ SUDO docker exec autoware bash -lc \
    echo -n 'NDT downsample in : '; timeout 8 ros2 topic hz /localization/util/downsample/pointcloud 2>/dev/null|grep -m1 average; \
    echo -n 'kinematic_state   : '; timeout 8 ros2 topic hz /localization/kinematic_state 2>/dev/null|grep -m1 average; \
    echo -n 'TF map->base_link : '; timeout 8 ros2 run tf2_ros tf2_echo map base_link 2>/dev/null|grep -m1 Translation"
+
+# GPU perception AFTER localization is up (so the TensorRT engine build doesn't
+# starve NDT during convergence). CenterPoint (CENTERPOINT=1) detects 3D objects
+# on the 4-lidar concat -> /perception/centerpoint/objects (cars + pedestrians,
+# streamed to the tablet's Tesla surround view). YOLOX (YOLOX=1) adds front-
+# camera 2D detection. Both coexist with the perception stub (keeps AUTO avail).
+if [ "${CENTERPOINT:-0}" = "1" ]; then
+  # delete the stale prebuilt engine ONCE (TRT-version-incompatible) -> rebuild.
+  SUDO docker exec autoware bash -c 'pkill -9 -f centerpoint; rm -f /root/autoware_data/lidar_centerpoint/*.engine; exit 0' >/dev/null 2>&1
+  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 launch autoware_lidar_centerpoint lidar_centerpoint.launch.xml input/pointcloud:=/sensing/lidar/concatenated/pointcloud output/objects:=/perception/centerpoint/objects model_name:=centerpoint_tiny > /tmp/cp.log 2>&1"
+  echo "    CenterPoint (GPU) -> /perception/centerpoint/objects (building engine ~60s, post-smoke)"
+fi
+if [ "${YOLOX:-0}" = "1" ]; then
+  SUDO docker cp "$REPO/ros/carla_camera_pub.py" autoware:/root/carla_camera_pub.py >/dev/null 2>&1
+  SUDO docker exec autoware bash -c 'pkill -9 -f "yolox|carla_camera_pub"; exit 0' >/dev/null 2>&1
+  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/carla_camera_pub.py > /tmp/cam.log 2>&1"
+  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 launch autoware_tensorrt_yolox yolox_tiny.launch.xml input/image:=/sensing/camera/camera0/image_rect_color use_decompress:=false > /tmp/yoloxt.log 2>&1"
+  echo "    YOLOX (GPU) on front camera -> /perception/object_recognition/detection/rois0"
+fi
 
 echo "==> Start ROS->WebSocket gateway (tablet app) + rviz on the monitor"
 # dedupe helpers in a SEPARATE exec: a pkill inside the same shell string as the
@@ -309,9 +422,24 @@ sleep 1
 # AUTO refused to engage). Restart only if not already publishing.
 SUDO docker exec autoware bash -lc \
   "pgrep -f perception_stub.py >/dev/null || { export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; setsid python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/pstub.log 2>&1 < /dev/null & }" >/dev/null 2>&1
-if [ "${MULTIMODE:-0}" = "1" ]; then
+# Multimode supervisor: in MULTIMODE it owns the EKF pose source; in ROii mode
+# we still run it so the tablet shows the LIDAR_GNSS<->GNSS_IMU fallback when
+# LiDARs are faulted (the core 4-LiDAR failover scenario).
+if [ "${MULTIMODE:-0}" = "1" ] || [ -n "${ROII_PROFILE:-}" ]; then
   SUDO docker exec -d autoware bash -lc \
     "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/multimode_supervisor.py --ros-args -p use_sim_time:=true > /tmp/multimode.log 2>&1"
+fi
+# NIRO=1: run the Niro multimode bridge BESIDE the supervisor. It demonstrates the
+# Niro spec's richer Pose Merger (per-mode weighted LiDAR/GNSS fusion + smooth
+# transition + jump measurement) on the CARLA topics, feeding the Niro tablet
+# dashboard via /niro/multimode/*. The supervisor still owns the EKF pose source
+# (proven driving); the bridge is the telemetry/redundancy layer.
+if [ "${NIRO:-0}" = "1" ]; then
+  SUDO docker exec autoware bash -c 'pkill -9 -f niro_bridge.py; exit 0' >/dev/null 2>&1
+  sleep 1
+  SUDO docker exec -d autoware bash -lc \
+    "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/niro_bridge.py --ros-args -p use_sim_time:=true > /tmp/niro_bridge.log 2>&1"
+  echo "    Niro bridge up -> /niro/multimode/* (단일 Ouster OS2-128 + RTK-GNSS 이중측위)"
 fi
 # gateway in its OWN docker exec -d (not chained with &, which left it unbound)
 SUDO docker exec -d autoware bash -lc \
@@ -326,7 +454,13 @@ for i in $(seq 1 60); do
   sleep 2
 done
 command -v adb >/dev/null && adb reverse tcp:8765 tcp:8765 >/dev/null 2>&1 || true
-# rviz on the host monitor (CARLA is RenderOffScreen, so the GPU display is free)
+# rviz on the host monitor (CARLA is RenderOffScreen, so the GPU display is free).
+# rviz2 can burn ~0.7-1 CPU core; the tablet app shows the same live state, so
+# RVIZ=0 skips it to leave CPU headroom -- useful for the heavier 4-LiDAR/ROii
+# modes (perception, concat) where planning competes for cores.
+if [ "${RVIZ:-1}" = "0" ]; then
+  echo "    rviz skipped (RVIZ=0) -- use the tablet app for visualization"
+elif true; then
 DISPLAY=$DISP XAUTHORITY=$XA xhost +local: >/dev/null 2>&1 || true
 if [ -n "${ROII_PROFILE:-}" ]; then
   SUDO docker cp "$REPO/rviz/roii_lidar_fault.rviz" autoware:/root/roii_lidar_fault.rviz >/dev/null 2>&1
@@ -337,6 +471,7 @@ else
    source /opt/autoware/setup.bash; \
    rviz2 -d /root/autoware_no_camera.rviz > /tmp/rviz.log 2>&1"
 fi
-echo "Done. Gateway: ws://<host>:8765/ws (adb reverse for USB). rviz on the monitor."
+fi
+echo "Done. Gateway: ws://<host>:8765/ws (adb reverse for USB). rviz on the monitor (unless RVIZ=0)."
 echo "CARLA log: /tmp/carla.log   Autoware log: docker exec autoware tail -f /tmp/e2e.log"
 exit 0
