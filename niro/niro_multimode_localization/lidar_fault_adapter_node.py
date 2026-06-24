@@ -23,6 +23,9 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import String, Bool
 from sensor_msgs.msg import PointCloud2
 
+# explicit severity ranking (string max() is lexicographic -> wrong, e.g. "m">"h")
+SEVERITY_ORDER = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
 
 class LidarFaultAdapter(Node):
     def __init__(self):
@@ -59,20 +62,29 @@ class LidarFaultAdapter(Node):
             self._ee = {"fault": True, "severity": "unknown", "reason": "bad_ee_msg"}
 
     def _tick(self):
-        fault, severity, reason, source = False, "none", "", "none"
-        # 1) E/E adaptation layer (authoritative)
-        if self._ee is not None:
-            fault = bool(self._ee.get("fault", False))
-            severity = self._ee.get("severity", "high" if fault else "none")
-            reason = self._ee.get("reason", "ee_layer")
-            source = self._ee.get("source", "ee_adaptation")
+        # collect every active fault source; combine by explicit severity ORDER
+        # (string max("medium","high") is wrong: "m">"h" lexically) + tag the source.
+        sources = []        # list of (severity, reason, source)
+        # 1) E/E adaptation layer (authoritative external fault)
+        if self._ee is not None and bool(self._ee.get("fault", False)):
+            sources.append((self._ee.get("severity", "high"),
+                            self._ee.get("reason", "ee_layer"), "external_fault"))
         # 2) manual test injection
         if self._inject:
-            fault, severity, reason, source = True, "high", "manual_injection", "test"
+            sources.append(("high", "manual_injection", "external_fault"))
         # 3) passive: LiDAR cloud stalled (data-link / sensor dead)
         if self._cloud_t > 0 and (self._now() - self._cloud_t) > self.cloud_stale_sec:
-            fault, severity = True, max(severity, "high")
-            reason = reason or "cloud_stale"; source = source if fault else "rate_monitor"
+            sources.append(("high", "cloud_stale", "cloud_stale"))
+
+        if not sources:
+            fault, severity, reason, source = False, "none", "", "none"
+        else:
+            fault = True
+            # highest severity by explicit order
+            severity = max((s[0] for s in sources), key=lambda x: SEVERITY_ORDER.get(x, 0))
+            reason = ";".join(s[1] for s in sources)
+            srcset = {s[2] for s in sources}
+            source = next(iter(srcset)) if len(srcset) == 1 else "multiple"
 
         self.pub_fault.publish(Bool(data=fault))
         self.pub_status.publish(String(data=json.dumps({

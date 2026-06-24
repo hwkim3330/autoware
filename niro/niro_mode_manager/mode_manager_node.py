@@ -76,10 +76,16 @@ class ModeManager(Node):
         if self._pending is not None:
             tgt, t0 = self._pending
             elapsed = self._now() - t0
-            # commit immediately (Pose Merger ramps weights smoothly); record result
+            # capture the ORIGIN mode BEFORE committing (was reading self._mode
+            # after assignment -> from_mode wrongly equalled the target).
+            from_mode = self._mode
+            # transition_timeout_sec: this is an immediate-commit model (the Pose
+            # Merger does the smooth weight ramp), so a transition cannot "time
+            # out"; we still flag it if elapsed somehow exceeds the budget.
+            result = "success" if elapsed <= self.transition_timeout_sec else "slow"
             self._mode = tgt
             self.pub_status.publish(String(data=json.dumps({
-                "from_mode": self._mode, "to": tgt, "result": "success",
+                "from_mode": from_mode, "to": tgt, "result": result,
                 "duration_ms": round(elapsed * 1000.0, 1)})))
             self._pending = None
         # publish authoritative mode continuously (no gap)
