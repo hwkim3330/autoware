@@ -1,0 +1,32 @@
+profile: ssu_niro
+source: real_vehicle
+multimode:
+  mode_topic: /multimode/mode
+  status_topic: /multimode/status
+  transition_event_topic: /multimode/transition_event
+  transition_status_topic: /multimode/transition_status
+  fused_pose_topic: /localization/multimode/pose_with_covariance
+  fused_twist_topic: /localization/multimode/twist_with_covariance
+autoware:
+  odometry_topic: ""
+  trajectory_topic: ""
+  operation_mode_topic: ""
+  route_state_topic: ""
+  mrm_state_topic: ""
+vehicle:
+  velocity_topic: ""
+  steering_topic: ""
+frames:
+  map_frame: map
+  base_frame: base_link
+network:
+  host: 0.0.0.0
+  port: 8765
+  path: /ws
+timeouts:
+  localization_sec: 1.0
+  vehicle_sec: 1.0
+  trajectory_sec: 3.0
+  system_sec: 3.0
+command:
+  enabled: false

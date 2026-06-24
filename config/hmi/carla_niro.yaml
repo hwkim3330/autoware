@@ -1,0 +1,29 @@
+profile: carla_niro
+source: simulation
+multimode:
+  mode_topic: /niro/multimode/mode
+  status_topic: /niro/multimode/status
+  transition_event_topic: /niro/multimode/transition_event
+  transition_status_topic: ""
+  fused_pose_topic: /localization/niro/fused_pose
+  fused_twist_topic: ""
+autoware:
+  odometry_topic: /localization/kinematic_state
+  trajectory_topic: /planning/scenario_planning/trajectory
+  operation_mode_topic: /api/operation_mode/state
+  route_state_topic: /api/routing/state
+  mrm_state_topic: ""
+vehicle:
+  velocity_topic: ""
+  steering_topic: ""
+network:
+  host: 0.0.0.0
+  port: 8766
+  path: /ws
+timeouts:
+  localization_sec: 1.0
+  vehicle_sec: 1.0
+  trajectory_sec: 3.0
+  system_sec: 3.0
+command:
+  enabled: false
