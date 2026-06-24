@@ -85,37 +85,45 @@ def main():
         L[rec["ID"]] = {"c": c, "left": offset(c, LANE_HALF, +1),
                         "right": offset(c, LANE_HALF, -1), "rec": rec}
     # incoming links per node (links whose ToNode == that node)
-    incoming = {}
+    # PASS 2: NODE-WELDING connectivity. The NGII A2_LINK FromNodeID/ToNodeID IS the
+    # explicit routing graph. At each node, weld EVERY link endpoint that meets there
+    # to a single shared (left,right) anchor: an incoming link contributes its END
+    # boundary points, an outgoing link its START boundary points. After welding, every
+    # incoming link's END == every outgoing link's START (shared vertices) -> lanelet2
+    # routes incoming->outgoing for ALL pairs at the node (forks/merges/junctions),
+    # not just one straightest pair. Anchors are computed once from ORIGINAL geometry
+    # (no cascade), so chains stay intact. The 'end' anchor and 'start' anchor of a
+    # node are computed separately then unified so an A.ToNode==B.FromNode pair shares.
+    touch = {}   # node_id -> list of (lid, "start"|"end")
     for lid, d in L.items():
-        incoming.setdefault(d["rec"].get("ToNodeID", ""), []).append(lid)
+        fn = d["rec"].get("FromNodeID", ""); tn = d["rec"].get("ToNodeID", "")
+        if fn:
+            touch.setdefault(fn, []).append((lid, "start"))
+        if tn:
+            touch.setdefault(tn, []).append((lid, "end"))
 
-    # PASS 2: connectivity -- snap each link's boundary START to the best
-    # predecessor's boundary END (predecessor = incoming link at FromNode whose
-    # end-heading best continues into this link's start-heading).
-    n_conn = 0
-    for lid, d in L.items():
-        fn = d["rec"].get("FromNodeID", "")
-        cands = [p for p in incoming.get(fn, []) if p != lid]
-        if not cands:
+    def lp(lid, side, end):   # endpoint (x,y,z) of a link's left/right boundary
+        arr = L[lid][side]
+        return arr[-1] if end == "end" else arr[0]
+
+    n_nodes = 0
+    for node_id, members in touch.items():
+        if len(members) < 2:
             continue
-        if len(cands) == 1:
-            best = cands[0]                       # single in->out: always continuous
-        else:
-            h0 = heading(d["c"], at_start=True)    # fork/merge: pick straightest, allow ~110deg
-            best, bestd = None, 1.9
-            for p in cands:
-                hp = heading(L[p]["c"], at_start=False)
-                dh = abs((hp - h0 + math.pi) % (2 * math.pi) - math.pi)
-                if dh < bestd:
-                    bestd, best = dh, p
-        if best is not None:
-            # snap this lanelet's START boundary onto the predecessor's END boundary
-            # (one-directional: don't move the predecessor's end, or it cascades and
-            # breaks ITS link to its own predecessor -> shared vertex, lanelet2 connects).
-            d["left"][0] = L[best]["left"][-1]
-            d["right"][0] = L[best]["right"][-1]
-            n_conn += 1
-    print(f"  connectivity: {n_conn}/{len(L)} links chained to a predecessor")
+        # left/right anchors = mean of all endpoints meeting at this node
+        lxs = [lp(lid, "left", e) for lid, e in members]
+        rxs = [lp(lid, "right", e) for lid, e in members]
+        la_ = (sum(p[0] for p in lxs) / len(lxs), sum(p[1] for p in lxs) / len(lxs),
+               sum(p[2] for p in lxs) / len(lxs))
+        ra_ = (sum(p[0] for p in rxs) / len(rxs), sum(p[1] for p in rxs) / len(rxs),
+               sum(p[2] for p in rxs) / len(rxs))
+        for lid, e in members:
+            if e == "end":
+                L[lid]["left"][-1] = la_; L[lid]["right"][-1] = ra_
+            else:
+                L[lid]["left"][0] = la_; L[lid]["right"][0] = ra_
+        n_nodes += 1
+    print(f"  connectivity: welded {n_nodes} shared nodes across {len(L)} links")
 
     # PASS 3: emit (nodes first, then ways + relations)
     out = ET.Element("osm", {"version": "0.6", "generator": "ngii_to_lanelet2"})
