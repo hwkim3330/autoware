@@ -98,15 +98,21 @@ def main():
         cands = [p for p in incoming.get(fn, []) if p != lid]
         if not cands:
             continue
-        h0 = heading(d["c"], at_start=True)
-        best, bestd = None, 1.2  # max ~70deg heading change to count as continuation
-        for p in cands:
-            hp = heading(L[p]["c"], at_start=False)
-            dh = abs((hp - h0 + math.pi) % (2 * math.pi) - math.pi)
-            if dh < bestd:
-                bestd, best = dh, p
+        if len(cands) == 1:
+            best = cands[0]                       # single in->out: always continuous
+        else:
+            h0 = heading(d["c"], at_start=True)    # fork/merge: pick straightest, allow ~110deg
+            best, bestd = None, 1.9
+            for p in cands:
+                hp = heading(L[p]["c"], at_start=False)
+                dh = abs((hp - h0 + math.pi) % (2 * math.pi) - math.pi)
+                if dh < bestd:
+                    bestd, best = dh, p
         if best is not None:
-            d["left"][0] = L[best]["left"][-1]    # share endpoints -> lanelet2 connects
+            # snap this lanelet's START boundary onto the predecessor's END boundary
+            # (one-directional: don't move the predecessor's end, or it cascades and
+            # breaks ITS link to its own predecessor -> shared vertex, lanelet2 connects).
+            d["left"][0] = L[best]["left"][-1]
             d["right"][0] = L[best]["right"][-1]
             n_conn += 1
     print(f"  connectivity: {n_conn}/{len(L)} links chained to a predecessor")
