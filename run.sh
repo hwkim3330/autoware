@@ -8,6 +8,7 @@
 #   ./run.sh stop            # 정지
 #   ./run.sh gateway         # 게이트웨이만 (재)시작 (앱 연결용)
 #   ./run.sh status          # 전체 프로세스 상태 한눈에
+#   ./run.sh killall            # 모든 시뮬(AWSIM/CARLA)+Autoware 스택 종료 (자원 해제)
 #   ./run.sh kill            # 전부 종료 (CARLA + 컨테이너) — 전기 절약
 #   ./run.sh app             # 태블릿 앱(ROii Command) 빌드+설치 (USB)
 #   ./run.sh mapdaemon       # 태블릿 맵-전환 데몬 (탭으로 맵 바꾸려면 상시 실행)
@@ -59,6 +60,7 @@ case "$CMD" in
     adb reverse tcp:8765 tcp:8765 && adb shell monkey -p com.keti.roii.command 1 >/dev/null 2>&1
     echo "ROii Command 설치+USB 연결+실행 완료"
     ;;
+  killall)  exec bash "$REPO/scripts/killall_sims.sh" ;;
   kill)
     SUDO pkill -9 -f CarlaUE4-Linux-Shipping
     SUDO docker stop autoware >/dev/null
