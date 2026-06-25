@@ -44,10 +44,14 @@ rclpy.init(); n=Node('cloud_relay')
 pub = n.create_publisher(PointCloud2, '/sensing/lidar/concatenated/pointcloud', qos_profile_sensor_data)
 c=[0]
 def cb(m):
+    # AWSIM publishes row_step=0 -> NDT's PCL conversion yields an EMPTY cloud (pose_buffer
+    # < 2 forever). Reconstruct row_step so NDT gets real points.
+    if m.row_step == 0 and m.width > 0 and m.point_step > 0:
+        m.height = 1; m.row_step = m.width * m.point_step
     pub.publish(m); c[0]+=1
     if c[0] % 50 == 1: n.get_logger().info(f"relayed {c[0]} w={m.width} row_step={m.row_step}")
 n.create_subscription(PointCloud2, '/sensing/lidar/top/pointcloud_before_sync', cb, qos_profile_sensor_data)
-n.get_logger().info("relay before_sync -> concatenated up")
+n.get_logger().info("relay (row_step-fixing) before_sync -> concatenated up")
 rclpy.spin(n)
 PYEOF
 
