@@ -55,6 +55,11 @@ n.get_logger().info("relay (row_step-fixing) before_sync -> concatenated up")
 rclpy.spin(n)
 PYEOF
 
+# copy the perception stub (clear-road for the planner) + tablet gateway into the container
+REPO=/home/kim/autoware-keti
+SUDO docker cp "$REPO/ros/perception_stub.py" autoware:/root/perception_stub.py 2>/dev/null
+SUDO docker cp "$REPO/ros/ros_ws_gateway.py"  autoware:/root/ros_ws_gateway.py  2>/dev/null
+
 echo "==> [1/4] clean reset (reap zombies + clear stale DDS/SHM)"
 # container shares HOST /dev/shm (--ipc=host -v /dev/shm) so stop/start does NOT clear it;
 # while the container is stopped (nothing holding shm) wipe stale FastDDS lock/segment files.
@@ -86,18 +91,29 @@ sleep 48
 # give AWSIM 3 dedicated phys cores (0-2), Autoware the rest - keeps AWSIM lidar at 10Hz
 DK "for p in \$(pgrep -f AWSIM-Demo); do taskset -cp 0-2,8-10 \$p >/dev/null 2>&1; done
     for p in \$(pgrep -f component_container); do taskset -cp 3-7,11-15 \$p >/dev/null 2>&1; done"
-echo "==> [3.5] seed localization (AWSIM ego pose: Shinjuku MGRS 54SUE x81381 y49920 yaw35)"
+# Start the relay + perception stub EARLY (right after e2e) so they join the SHM graph and
+# integrate into the diagnostic aggregator. relay: before_sync->concatenated (row_step fix)
+# feeds NDT. perception_stub: empty objects + obstacle pc + clear occupancy grid so the
+# planner generates a trajectory without the full perception stack.
+echo "==> [3.4] relay (before_sync->concatenated) + perception_stub (clear road)"
+DKD "ulimit -n 65536; source /opt/autoware/setup.bash; python3 /opt/cloud_relay.py > /tmp/relay.log 2>&1"
+DKD "ulimit -n 65536; source /opt/autoware/setup.bash; python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/percstub.log 2>&1"
+sleep 14   # let NDT start matching off the relayed concatenated cloud before seeding
+
+echo "==> [3.5] seed localization (AWSIM gnss pose: Shinjuku MGRS 54SUE x81378 y49917 yaw34)"
 DK ". /opt/autoware/setup.bash; ulimit -n 65536
    ros2 service call /api/localization/initialize autoware_adapi_v1_msgs/srv/InitializeLocalization \
-   '{pose: [{header: {frame_id: map}, pose: {pose: {position: {x: 81381.7, y: 49920.2, z: 41.6}, orientation: {z: 0.30071, w: 0.95372}}, covariance: [1,0,0,0,0,0, 0,1,0,0,0,0, 0,0,0.01,0,0,0, 0,0,0,0.01,0,0, 0,0,0,0,0.01,0, 0,0,0,0,0,0.2]}}]}'" >/dev/null 2>&1
+   '{pose: [{header: {frame_id: map}, pose: {pose: {position: {x: 81377.98, y: 49917.33, z: 43.09}, orientation: {z: 0.30071, w: 0.95372}}, covariance: [1,0,0,0,0,0, 0,1,0,0,0,0, 0,0,0.01,0,0,0, 0,0,0,0.01,0,0, 0,0,0,0,0.01,0, 0,0,0,0,0,0.2]}}]}'" >/dev/null 2>&1
+sleep 8
 
-echo "==> [3.7] relay before_sync -> concatenated (built-in topic_tools relay doesn't deliver;"
-echo "         AWSIM single-lidar feeds NDT through this)"
-DKD "ulimit -n 65536; source /opt/autoware/setup.bash; python3 /opt/cloud_relay.py > /tmp/relay.log 2>&1"
+echo "==> [3.6] gateway (Tesla tablet feed, WS :8765, Shinjuku origin)"
+DKD "ulimit -n 65536
+     export LANELET_OSM=/root/autoware_map/shinjuku/lanelet2_map.osm NIRO_ORIGIN='35.2376422,138.7889491' NIRO_SITE='shinjuku' DISPLAY=:1 XAUTHORITY=/root/.Xauthority
+     source /opt/autoware/setup.bash; python3 -u /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
 sleep 6
 
-echo "==> [4/4] status (probe with ulimit 65536; CLI probes are flaky at this DDS scale)"
-DK "echo 'AWSIM /clock subs: '\$(. /opt/ros/humble/setup.bash; ros2 topic info /clock 2>/dev/null|grep -o 'Subscription count: [0-9]*')
-    echo 'SHM lock errors: '\$(grep -c open_and_lock_file /tmp/awsim_aw.log)
-    echo 'distortion IMU-late warns: '\$(grep -c 'IMU time_stamp is too late' /tmp/awsim_aw.log)"
-echo "Done. Tesla tablet app: ~/awsim_tesla (com.keti.awsim_tesla)."
+echo "==> [4/4] status"
+DK "echo 'relay: '\$(grep relayed /tmp/relay.log 2>/dev/null|tail -1)
+    echo 'gateway: '\$(pgrep -fc ros_ws_gateway) ' procs ; perception_stub: '\$(pgrep -fc perception_stub)' procs'
+    echo 'NDT pose_buffer<2 (stops growing when converged): '\$(grep -c 'pose_buffer_.size() < 2' /tmp/awsim_aw.log)"
+echo "Done. Tablet feed: ws://127.0.0.1:8765/ws  (app: com.keti.awsim_tesla, adb reverse tcp:8765 tcp:8765)"
