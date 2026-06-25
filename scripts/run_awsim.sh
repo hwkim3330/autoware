@@ -29,12 +29,27 @@ AWSIM=/opt/awsim/AWSIM-Demo
 echo "==> [0/4] one-time container prep (idempotent)"
 DK "command -v vulkaninfo >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq vulkan-tools mesa-vulkan-drivers libvulkan1; }"
 DK "test -x $AWSIM/AWSIM-Demo.x86_64 || echo 'MISSING: docker cp ~/AWSIM/AWSIM-Demo autoware:/opt/awsim/'"
-# AWSIM-Demo lidar/imu/twist timestamps don't let the distortion_corrector interpolate
-# ("Twist/IMU time_stamp is too late") -> it skips every cloud -> empty rectified -> no
-# concat -> NDT starved. Disable distortion correction (fine for a sim) so ring_outlier
-# reads the valid mirror_cropped cloud directly.
-DK "sed -i 's|<arg name=\\\"use_distortion_corrector\\\" default=\\\"true\\\"/>|<arg name=\\\"use_distortion_corrector\\\" default=\\\"false\\\"/>|' /opt/autoware/share/awsim_sensor_kit_launch/launch/lidar.launch.xml"
+# Keep distortion ENABLED: it produces /sensing/lidar/top/pointcloud_before_sync (the chain
+# needs it; disabling it kills before_sync entirely). The "Twist/IMU too late" warnings are
+# intermittent - before_sync still flows (~26k pts). Ensure the default is back to true.
+DK "sed -i 's|<arg name=\\\"use_distortion_corrector\\\" default=\\\"false\\\"/>|<arg name=\\\"use_distortion_corrector\\\" default=\\\"true\\\"/>|' /opt/autoware/share/awsim_sensor_kit_launch/launch/lidar.launch.xml"
 SUDO docker update --cpuset-cpus=0-15 autoware   # use all cores (0,8 were host-reserved)
+# install the before_sync->concatenated relay node into the container
+echo 1 | sudo -S docker exec -i autoware bash -c 'cat > /opt/cloud_relay.py' << 'PYEOF'
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import PointCloud2
+rclpy.init(); n=Node('cloud_relay')
+pub = n.create_publisher(PointCloud2, '/sensing/lidar/concatenated/pointcloud', qos_profile_sensor_data)
+c=[0]
+def cb(m):
+    pub.publish(m); c[0]+=1
+    if c[0] % 50 == 1: n.get_logger().info(f"relayed {c[0]} w={m.width} row_step={m.row_step}")
+n.create_subscription(PointCloud2, '/sensing/lidar/top/pointcloud_before_sync', cb, qos_profile_sensor_data)
+n.get_logger().info("relay before_sync -> concatenated up")
+rclpy.spin(n)
+PYEOF
 
 echo "==> [1/4] clean reset (reap zombies + clear stale DDS/SHM)"
 # container shares HOST /dev/shm (--ipc=host -v /dev/shm) so stop/start does NOT clear it;
@@ -71,6 +86,11 @@ echo "==> [3.5] seed localization (AWSIM ego pose: Shinjuku MGRS 54SUE x81381 y4
 DK ". /opt/autoware/setup.bash; ulimit -n 65536
    ros2 service call /api/localization/initialize autoware_adapi_v1_msgs/srv/InitializeLocalization \
    '{pose: [{header: {frame_id: map}, pose: {pose: {position: {x: 81381.7, y: 49920.2, z: 41.6}, orientation: {z: 0.30071, w: 0.95372}}, covariance: [1,0,0,0,0,0, 0,1,0,0,0,0, 0,0,0.01,0,0,0, 0,0,0,0.01,0,0, 0,0,0,0,0.01,0, 0,0,0,0,0,0.2]}}]}'" >/dev/null 2>&1
+
+echo "==> [3.7] relay before_sync -> concatenated (built-in topic_tools relay doesn't deliver;"
+echo "         AWSIM single-lidar feeds NDT through this)"
+DKD "ulimit -n 65536; source /opt/autoware/setup.bash; python3 /opt/cloud_relay.py > /tmp/relay.log 2>&1"
+sleep 6
 
 echo "==> [4/4] status (probe with ulimit 65536; CLI probes are flaky at this DDS scale)"
 DK "echo 'AWSIM /clock subs: '\$(. /opt/ros/humble/setup.bash; ros2 topic info /clock 2>/dev/null|grep -o 'Subscription count: [0-9]*')
