@@ -36,7 +36,41 @@ Discovery vs data: when AWSIM *was* briefly seen publishing, the container saw t
 but no DATA — that was the SHM split (now fixed) + lo-multicast-off (now fixed). The remaining
 wall is simply that AWSIM isn't *running its sim* in either environment.
 
-## Resolution paths (pick one, focused session)
+## RESOLVED 2026-06-25 — run AWSIM INSIDE the humble container (no host bridge)
+The winning approach: stop bridging host(jazzy)<->container(humble); run AWSIM-Demo v2
+*inside* the `autoware` (humble) container so AWSIM + Autoware share one DDS.
+- **Vulkan in container** (the key unlock): `apt install vulkan-tools mesa-vulkan-drivers
+  libvulkan1` -> `vulkaninfo` shows RTX 3090 -> AWSIM-Demo v2 renders at **6 GB GPU**
+  (`-force-vulkan`, DISPLAY=:1, XAUTHORITY=/root/.Xauthority, VK_ICD_FILENAMES=nvidia_icd.json,
+  and UNSET AMENT_PREFIX_PATH/ROS_DISTRO/RMW/LD_LIBRARY_PATH/PYTHONPATH). AWSIM-Demo copied to
+  `/opt/awsim/AWSIM-Demo` (3.5G, `docker cp`). (AWSIM-**Labs** loads but its scene won't auto-run
+  -> "No configuration file provided"; AWSIM-**Demo** v2 auto-runs -> use the Demo.)
+- **Result: /clock at ~98 Hz + lidar/gnss/camera/imu/twist/velocity all flow to Autoware**
+  (verified: localization crop_box processed a real 26754-pt cloud).
+- **Zombie trap**: relaunching AWSIM left zombie procs whose dead DDS publishers got
+  discovered as /clock (Publisher count 1, but SILENT). Fix: `docker stop && docker start`
+  (NEVER `restart` - breaks CUDA/NVML) reaps zombies + clears /dev/shm; launch exactly ONE.
+- **fd limit**: container `ulimit -n`=1024 -> FastDDS SHM `open_and_lock_file failed` at
+  ~118 participants. Launch Autoware (and AWSIM) with `ulimit -n 65536` -> 0 SHM lock errors.
+- **AWSIM cannot use a UDP FastDDS profile** (bundled FastDDS fails init -> no render). SHM only.
+- **CPU**: container cpuset was `1-7,9-15` (host reserved phys core 0 = logical 0,8). Since
+  AWSIM now runs IN the container, gave it all cores: `docker update --cpuset-cpus=0-15`.
+  (Pinning AWSIM to <2 physical cores starves its sim loop -> clock stalls.)
+- Launcher: `scripts/run_awsim.sh` (full working recipe).
+
+## REMAINING GAP (sensor pipeline -> localization)
+`e2e_simulator ... sensor_model:=awsim_sensor_kit` has two issues vs AWSIM-Demo v2:
+1. `velodyne_ros_wrapper_node` (Nebula hw driver) loads + crashes ("Could not set
+   SensorConfiguration" / "disallows broadcast IP") even with `launch_sensing_driver:=false`.
+2. `distortion_corrector_node: IMU time_stamp is too late. Could not interpolate.` (repeating)
+   -> no `/sensing/lidar/top/pointcloud` -> no concatenated cloud -> NDT no input ->
+   `/initialpose3d` never set -> localization stays UNINITIALIZED (state 1).
+NEXT: likely an IMU/LiDAR time-sync or sensor-kit mismatch. Try `awsim_labs_sensor_kit`
+(+ awsim_labs_vehicle) which matches the container's kit, or fix the distortion-corrector
+time tolerance / verify use_sim_time on the sensing nodes. CLI `ros2 topic` probes are
+unreliable at this DDS scale (can't late-join the SHM graph) - trust the e2e's own logs.
+
+## (historical) Resolution paths considered before the in-container approach
 1. **Install ROS2 humble RUNTIME libs on the host** (at least libspdlog1.9/libfmt8 + rcl deps,
    or a minimal `ros-humble-rmw-fastrtps-cpp`), so AWSIM-Labs runs NATIVELY on the host where
    Vulkan/HDRP renders (it hit 6 GB GPU there). Risk: coexisting with the host's jazzy.

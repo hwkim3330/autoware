@@ -1,40 +1,58 @@
 #!/usr/bin/env bash
-# AWSIM (Autoware Unity sim) launcher + the host DDS config it needs.
+# AWSIM (Autoware Unity sim) — WORKING launcher (runs ENTIRELY inside the humble
+# `autoware` container, so AWSIM + Autoware share one DDS — no host<->container bridge).
 #
-# STATUS (2026-06-25): blocked by a host ROS-version mismatch — see docs/awsim_setup.md.
-#   - AWSIM-Labs v1.6.1 (~/AWSIM/awsim_labs/) + AWSIM v2.0.1 (~/AWSIM/AWSIM-Demo/) both
-#     need ROS2 HUMBLE libs. The host runs ROS2 JAZZY -> AWSIM's bundled librcl.so
-#     fails (UnsatisfiedLinkError: libspdlog.so.1 / libfmt.so.8 are jazzy versions).
-#   - Running AWSIM inside the humble container loads librcl fine but the Unity/HDRP
-#     scene won't render (no Vulkan ICD in the container) -> sim idle, no /sensing topics.
-# RESOLUTION PATHS (need a focused session): (a) install ROS2 humble RUNTIME libs on the
-# host so AWSIM runs natively where Vulkan works, or (b) add the NVIDIA Vulkan ICD +
-# HDRP support into the container.
+# BREAKTHROUGH (2026-06-25): the host is ROS2 jazzy, AWSIM needs humble. Instead of
+# bridging, we run AWSIM *inside* the humble container. The blockers + fixes:
+#   1. Vulkan in container: `apt install vulkan-tools mesa-vulkan-drivers libvulkan1`
+#      -> AWSIM-Demo v2 renders at 6 GB GPU (vulkaninfo shows the RTX 3090).
+#   2. Zombie AWSIM procs from relaunches left STALE DDS publishers; the container kept
+#      discovering a dead zombie's /clock publisher -> SILENT. Fix: clean container
+#      `docker stop && docker start` (NOT restart - restart breaks CUDA/NVML) reaps
+#      zombies + clears /dev/shm. Then launch exactly ONE AWSIM.
+#   3. Low fd limit: container `ulimit -n` = 1024 -> FastDDS SHM "open_and_lock_file
+#      failed" with ~118 participants. Launch Autoware with `ulimit -n 65536`.
+#   4. AWSIM canNOT take a FastDDS UDP profile (bundled FastDDS fails init -> no render).
+#      So SHM is mandatory for AWSIM. Default DDS only.
+#   5. e2e must use `launch_sensing_driver:=false` (still partially loads Nebula; see
+#      docs/awsim_setup.md - sensor-kit pipeline is the remaining gap).
 #
-# This script does the parts that ARE correct so they're ready once the above is fixed.
+# STILL-OPEN (sensor pipeline): distortion_corrector "IMU time_stamp is too late" ->
+# no concatenated cloud -> NDT no input -> /initialpose3d never set. See docs.
 set +e
 SUDO() { echo 1 | sudo -S "$@" 2>/dev/null; }
-LABS=/home/kim/AWSIM/awsim_labs/awsim_labs_v1.6.1
+DK() { echo 1 | sudo -S docker exec autoware bash -c "$1" 2>/dev/null; }
+DKD() { echo 1 | sudo -S docker exec -d autoware bash -c "$1" 2>/dev/null; }
 MAP=/root/autoware_map/shinjuku
+AWSIM=/opt/awsim/AWSIM-Demo
 
-echo "==> [1/3] AWSIM-Labs DDS config (REQUIRED: localhost multicast + big UDP buffers)"
-SUDO ip link set lo multicast on            # DDS data over loopback needs multicast
-SUDO sysctl -w net.core.rmem_max=2147483647 >/dev/null
-SUDO sysctl -w net.ipv4.ipfrag_time=3 net.ipv4.ipfrag_high_thresh=134217728 >/dev/null
-echo "    lo multicast: $(ip link show lo | grep -o MULTICAST || echo OFF)"
+echo "==> [0/4] one-time container prep (idempotent)"
+DK "command -v vulkaninfo >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq vulkan-tools mesa-vulkan-drivers libvulkan1; }"
+DK "test -x $AWSIM/AWSIM-Demo.x86_64 || echo 'MISSING: docker cp ~/AWSIM/AWSIM-Demo autoware:/opt/awsim/'"
+SUDO docker update --cpuset-cpus=0-15 autoware   # use all cores (0,8 were host-reserved)
 
-echo "==> [2/3] launch AWSIM-Labs (standalone — do NOT source ROS2; it bundles its own)"
-# NOTE: on the host this fails (jazzy). Provide humble libspdlog.so.1.9.2 + libfmt.so.8
-# into $LABS/awsim_labs_Data/Plugins/ (copied from the humble container) so $ORIGIN RPATH
-# resolves them, OR run where /opt/ros/humble exists.
-cd "$LABS" 2>/dev/null && chmod +x awsim_labs.x86_64
-( unset AMENT_PREFIX_PATH ROS_DISTRO RMW_IMPLEMENTATION
-  DISPLAY=:1 ./awsim_labs.x86_64 -force-vulkan > /tmp/awsim_labs.log 2>&1 & )
-echo "    AWSIM-Labs launching (check /tmp/awsim_labs.log + ~/.config/unity3d/AWF/'AWSIM Labs'/Player.log)"
+echo "==> [1/4] clean reset (reap zombies + clear stale DDS/SHM)"
+SUDO docker stop autoware >/dev/null; SUDO docker start autoware >/dev/null; sleep 8
+
+echo "==> [2/4] launch AWSIM-Demo v2 inside container (Vulkan + host X :1, default SHM)"
+DKD "unset AMENT_PREFIX_PATH ROS_DISTRO RMW_IMPLEMENTATION LD_LIBRARY_PATH PYTHONPATH
+     export DISPLAY=:1 XAUTHORITY=/root/.Xauthority VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json
+     ulimit -n 65536
+     cd $AWSIM && ./AWSIM-Demo.x86_64 -force-vulkan -screen-width 1280 -screen-height 720 > /tmp/awsim_demo.log 2>&1"
+sleep 10; DISPLAY=:1 wmctrl -a AWSIM 2>/dev/null; sleep 33
+echo "    AWSIM GPU: $(nvidia-smi --query-compute-apps=process_name,used_memory --format=csv,noheader 2>/dev/null | grep -i awsim || echo 'NOT RENDERING')"
+
+echo "==> [3/4] Autoware e2e on Shinjuku (awsim_sensor_kit, raised fd limit, no rviz)"
+DKD "ulimit -n 65536; export DISPLAY=:1 XAUTHORITY=/root/.Xauthority
+     source /opt/autoware/setup.bash
+     ros2 launch autoware_launch e2e_simulator.launch.xml \
+       vehicle_model:=sample_vehicle sensor_model:=awsim_sensor_kit map_path:=$MAP \
+       launch_vehicle_interface:=true launch_sensing_driver:=false perception:=false rviz:=false \
+       > /tmp/awsim_aw.log 2>&1"
 sleep 45
 
-echo "==> [3/3] Autoware e2e on Shinjuku (awsim models; default DDS, perception off)"
-# inside the autoware (humble) container; AWSIM publishes /sensing/* /clock /vehicle/status
-SUDO docker exec -d autoware bash -lc "export DISPLAY=:1; export XAUTHORITY=/root/.Xauthority; source /opt/autoware/setup.bash && ros2 launch autoware_launch e2e_simulator.launch.xml vehicle_model:=awsim_labs_vehicle sensor_model:=awsim_labs_sensor_kit map_path:=$MAP launch_vehicle_interface:=true perception:=false rviz:=true > /tmp/awsim_aw.log 2>&1"
-echo "Done. Verify sensors: docker exec autoware bash -lc 'source /opt/autoware/setup.bash; ros2 topic hz /sensing/lidar/concatenated/pointcloud'"
-echo "If 0 topics: AWSIM isn't publishing (see docs/awsim_setup.md — host humble-libs / container-Vulkan issue)."
+echo "==> [4/4] status (probe with ulimit 65536; CLI probes are flaky at this DDS scale)"
+DK "echo 'AWSIM /clock subs: '\$(. /opt/ros/humble/setup.bash; ros2 topic info /clock 2>/dev/null|grep -o 'Subscription count: [0-9]*')
+    echo 'SHM lock errors: '\$(grep -c open_and_lock_file /tmp/awsim_aw.log)
+    echo 'distortion IMU-late warns: '\$(grep -c 'IMU time_stamp is too late' /tmp/awsim_aw.log)"
+echo "Done. Tesla tablet app: ~/awsim_tesla (com.keti.awsim_tesla)."
