@@ -34,6 +34,13 @@ DK "test -x $AWSIM/AWSIM-Demo.x86_64 || echo 'MISSING: docker cp ~/AWSIM/AWSIM-D
 # intermittent - before_sync still flows (~26k pts). Ensure the default is back to true.
 DK "sed -i 's|<arg name=\\\"use_distortion_corrector\\\" default=\\\"false\\\"/>|<arg name=\\\"use_distortion_corrector\\\" default=\\\"true\\\"/>|' /opt/autoware/share/awsim_sensor_kit_launch/launch/lidar.launch.xml"
 SUDO docker update --cpuset-cpus=0-15 autoware   # use all cores (0,8 were host-reserved)
+# DDS transport: default SHM+UDP (shared host /dev/shm via --ipc=host) is what works for
+# data flow + localization. (Tried: isolated /dev/shm -> no data flow; UDP-only profile ->
+# "Not enough memory in the buffer stream" on node init + preprocessing breaks.) Known
+# residual: FastDDS SHM doesn't deliver the TRANSIENT_LOCAL latched route/map to the
+# scenario_selector process -> no trajectory -> autonomous unavailable (driving blocked).
+SUDO ip link set lo multicast on
+FASTDDS=""   # keep default DDS; see note above
 # install the before_sync->concatenated relay node into the container
 echo 1 | sudo -S docker exec -i autoware bash -c 'cat > /opt/cloud_relay.py' << 'PYEOF'
 import rclpy
@@ -78,7 +85,7 @@ echo "    AWSIM GPU: $(nvidia-smi --query-compute-apps=process_name,used_memory 
 # AWSIM-Demo v2 has ONE lidar ("top") -> use awsim_sensor_kit (single-lidar). awsim_LABS
 # kit expects top+left+right -> concatenate skips (left/right nullptr) -> no NDT input.
 echo "==> [3/4] Autoware e2e on Shinjuku (awsim_sensor_kit = AWSIM-Demo's single-lidar match)"
-DKD "ulimit -n 65536; export DISPLAY=:1 XAUTHORITY=/root/.Xauthority
+DKD "$FASTDDS ulimit -n 65536; export DISPLAY=:1 XAUTHORITY=/root/.Xauthority
      source /opt/autoware/setup.bash
      # do NOT pass launch_sensing_driver:=false - it disables the whole sensing PIPELINE
      # (crop/distortion/concatenate), not just the hw driver. The Nebula/velodyne driver
@@ -96,21 +103,26 @@ DK "for p in \$(pgrep -f AWSIM-Demo); do taskset -cp 0-2,8-10 \$p >/dev/null 2>&
 # feeds NDT. perception_stub: empty objects + obstacle pc + clear occupancy grid so the
 # planner generates a trajectory without the full perception stack.
 echo "==> [3.4] relay (before_sync->concatenated) + perception_stub (clear road)"
-DKD "ulimit -n 65536; source /opt/autoware/setup.bash; python3 /opt/cloud_relay.py > /tmp/relay.log 2>&1"
-DKD "ulimit -n 65536; source /opt/autoware/setup.bash; python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/percstub.log 2>&1"
+DKD "$FASTDDS ulimit -n 65536; source /opt/autoware/setup.bash; python3 /opt/cloud_relay.py > /tmp/relay.log 2>&1"
+DKD "$FASTDDS ulimit -n 65536; source /opt/autoware/setup.bash; python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/percstub.log 2>&1"
 sleep 14   # let NDT start matching off the relayed concatenated cloud before seeding
 
 echo "==> [3.5] seed localization (AWSIM gnss pose: Shinjuku MGRS 54SUE x81378 y49917 yaw34)"
-DK ". /opt/autoware/setup.bash; ulimit -n 65536
-   ros2 service call /api/localization/initialize autoware_adapi_v1_msgs/srv/InitializeLocalization \
+DK "$FASTDDS . /opt/autoware/setup.bash; ulimit -n 65536
+   timeout 20 ros2 service call /api/localization/initialize autoware_adapi_v1_msgs/srv/InitializeLocalization \
    '{pose: [{header: {frame_id: map}, pose: {pose: {position: {x: 81377.98, y: 49917.33, z: 43.09}, orientation: {z: 0.30071, w: 0.95372}}, covariance: [1,0,0,0,0,0, 0,1,0,0,0,0, 0,0,0.01,0,0,0, 0,0,0,0.01,0,0, 0,0,0,0,0.01,0, 0,0,0,0,0,0.2]}}]}'" >/dev/null 2>&1
 sleep 8
 
-echo "==> [3.6] gateway (Tesla tablet feed, WS :8765, Shinjuku origin)"
-DKD "ulimit -n 65536
+echo "==> [3.6] gateway (Tesla tablet feed, WS :8765 - the primary 3D visualization)"
+DKD "$FASTDDS ulimit -n 65536
      export LANELET_OSM=/root/autoware_map/shinjuku/lanelet2_map.osm NIRO_ORIGIN='35.2376422,138.7889491' NIRO_SITE='shinjuku' DISPLAY=:1 XAUTHORITY=/root/.Xauthority
      source /opt/autoware/setup.bash; python3 -u /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
-sleep 6
+# NOTE: do NOT auto-launch RViz on :1 - it steals X focus and Unity PAUSES AWSIM (drops to
+# 364MB, sensors stop, localization dies; AWSIM then won't resume without a container
+# stop/start). AWSIM (Unity) must keep focus on its display. The Tesla tablet (ws :8765) is
+# the live 3D view instead. To use RViz, give AWSIM its OWN X display (:2) so it never loses
+# focus (see docs/awsim_setup.md), then run RViz on :1.
+sleep 4; DISPLAY=:1 wmctrl -a AWSIM 2>/dev/null   # keep AWSIM focused
 
 echo "==> [4/4] status"
 DK "echo 'relay: '\$(grep relayed /tmp/relay.log 2>/dev/null|tail -1)
