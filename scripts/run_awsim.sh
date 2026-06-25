@@ -29,6 +29,11 @@ AWSIM=/opt/awsim/AWSIM-Demo
 echo "==> [0/4] one-time container prep (idempotent)"
 DK "command -v vulkaninfo >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq vulkan-tools mesa-vulkan-drivers libvulkan1; }"
 DK "test -x $AWSIM/AWSIM-Demo.x86_64 || echo 'MISSING: docker cp ~/AWSIM/AWSIM-Demo autoware:/opt/awsim/'"
+# AWSIM-Demo lidar/imu/twist timestamps don't let the distortion_corrector interpolate
+# ("Twist/IMU time_stamp is too late") -> it skips every cloud -> empty rectified -> no
+# concat -> NDT starved. Disable distortion correction (fine for a sim) so ring_outlier
+# reads the valid mirror_cropped cloud directly.
+DK "sed -i 's|<arg name=\\\"use_distortion_corrector\\\" default=\\\"true\\\"/>|<arg name=\\\"use_distortion_corrector\\\" default=\\\"false\\\"/>|' /opt/autoware/share/awsim_sensor_kit_launch/launch/lidar.launch.xml"
 SUDO docker update --cpuset-cpus=0-15 autoware   # use all cores (0,8 were host-reserved)
 
 echo "==> [1/4] clean reset (reap zombies + clear stale DDS/SHM)"
@@ -51,9 +56,12 @@ echo "    AWSIM GPU: $(nvidia-smi --query-compute-apps=process_name,used_memory 
 echo "==> [3/4] Autoware e2e on Shinjuku (awsim_sensor_kit = AWSIM-Demo's single-lidar match)"
 DKD "ulimit -n 65536; export DISPLAY=:1 XAUTHORITY=/root/.Xauthority
      source /opt/autoware/setup.bash
+     # do NOT pass launch_sensing_driver:=false - it disables the whole sensing PIPELINE
+     # (crop/distortion/concatenate), not just the hw driver. The Nebula/velodyne driver
+     # loads + crashes harmlessly (we feed AWSIM's raw cloud); preprocessing still runs.
      ros2 launch autoware_launch e2e_simulator.launch.xml \
        vehicle_model:=sample_vehicle sensor_model:=awsim_sensor_kit map_path:=$MAP \
-       launch_vehicle_interface:=true launch_sensing_driver:=false perception:=false rviz:=false \
+       launch_vehicle_interface:=true perception:=false rviz:=false \
        > /tmp/awsim_aw.log 2>&1"
 sleep 48
 # give AWSIM 3 dedicated phys cores (0-2), Autoware the rest - keeps AWSIM lidar at 10Hz
