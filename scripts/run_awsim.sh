@@ -33,14 +33,24 @@ DK "test -x $AWSIM/AWSIM-Demo.x86_64 || echo 'MISSING: docker cp ~/AWSIM/AWSIM-D
 # needs it; disabling it kills before_sync entirely). The "Twist/IMU too late" warnings are
 # intermittent - before_sync still flows (~26k pts). Ensure the default is back to true.
 DK "sed -i 's|<arg name=\\\"use_distortion_corrector\\\" default=\\\"false\\\"/>|<arg name=\\\"use_distortion_corrector\\\" default=\\\"true\\\"/>|' /opt/autoware/share/awsim_sensor_kit_launch/launch/lidar.launch.xml"
-SUDO docker update --cpuset-cpus=0-15 autoware   # use all cores (0,8 were host-reserved)
+# Official AWSIM bring-up does not pin CPUs; let Linux schedule AWSIM and Autoware across all cores.
+SUDO docker update --cpuset-cpus="" autoware >/dev/null 2>&1 || true
+# AWSIM demo mode: vehicle_cmd_gate sees stale planning/localization diagnostics as
+# system emergency and publishes PARK. Patch the launch-time YAML before e2e starts;
+# runtime ros2 param set is unreliable here because FastDDS discovery can miss the
+# composable node while the graph is busy.
+DK "sed -i 's/use_emergency_handling: true/use_emergency_handling: false/' /opt/autoware/share/autoware_launch/config/control/vehicle_cmd_gate/vehicle_cmd_gate.param.yaml"
 # DDS transport: default SHM+UDP (shared host /dev/shm via --ipc=host) is what works for
 # data flow + localization. (Tried: isolated /dev/shm -> no data flow; UDP-only profile ->
 # "Not enough memory in the buffer stream" on node init + preprocessing breaks.) Known
 # residual: FastDDS SHM doesn't deliver the TRANSIENT_LOCAL latched route/map to the
 # scenario_selector process -> no trajectory -> autonomous unavailable (driving blocked).
 SUDO ip link set lo multicast on
-FASTDDS=""   # keep default DDS; see note above
+# FastDDS DISCOVERY SERVER: default simple (multicast) discovery is unreliable at ~115
+# participants -> new nodes (relay/gnss feed/probes) fail to match -> no delivery -> EKF<->NDT
+# loop never closes. A central discovery server gives reliable matching + clean participant-id
+# (=SHM port) allocation. ALL participants (AWSIM + Autoware) must point at it.
+FASTDDS="export ROS_DISCOVERY_SERVER=127.0.0.1:11811;"
 # install the before_sync->concatenated relay node into the container
 echo 1 | sudo -S docker exec -i autoware bash -c 'cat > /opt/cloud_relay.py' << 'PYEOF'
 import rclpy
@@ -66,6 +76,7 @@ PYEOF
 REPO=/home/kim/autoware-keti
 SUDO docker cp "$REPO/ros/perception_stub.py" autoware:/root/perception_stub.py 2>/dev/null
 SUDO docker cp "$REPO/ros/ros_ws_gateway.py"  autoware:/root/ros_ws_gateway.py  2>/dev/null
+SUDO docker cp "$REPO/ros/awsim_gate_override.py" autoware:/root/awsim_gate_override.py 2>/dev/null
 
 echo "==> [1/4] clean reset (reap zombies + clear stale DDS/SHM)"
 # container shares HOST /dev/shm (--ipc=host -v /dev/shm) so stop/start does NOT clear it;
@@ -74,9 +85,14 @@ SUDO docker stop autoware >/dev/null
 SUDO bash -c 'rm -f /dev/shm/*fastrtps* /dev/shm/sem.*fastrtps* /dev/shm/*fastdds* 2>/dev/null; true'
 SUDO docker start autoware >/dev/null; sleep 8
 
-echo "==> [2/4] launch AWSIM-Demo v2 inside container (Vulkan + host X :1, default SHM)"
+echo "==> [1.5/4] start FastDDS discovery server (id 0 @ 127.0.0.1:11811)"
+DKD "source /opt/ros/humble/setup.bash; fastdds discovery -i 0 -l 127.0.0.1 -p 11811 > /tmp/dserver.log 2>&1"
+sleep 3
+
+echo "==> [2/4] launch AWSIM-Demo v2 inside container (Vulkan + host X :1, discovery server)"
 DKD "unset AMENT_PREFIX_PATH ROS_DISTRO RMW_IMPLEMENTATION LD_LIBRARY_PATH PYTHONPATH
      export DISPLAY=:1 XAUTHORITY=/root/.Xauthority VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json
+     export ROS_DISCOVERY_SERVER=127.0.0.1:11811
      ulimit -n 65536
      cd $AWSIM && ./AWSIM-Demo.x86_64 -force-vulkan -screen-width 1280 -screen-height 720 > /tmp/awsim_demo.log 2>&1"
 sleep 10; DISPLAY=:1 wmctrl -a AWSIM 2>/dev/null; sleep 33
@@ -95,9 +111,13 @@ DKD "$FASTDDS ulimit -n 65536; export DISPLAY=:1 XAUTHORITY=/root/.Xauthority
        launch_vehicle_interface:=true perception:=false rviz:=false \
        > /tmp/awsim_aw.log 2>&1"
 sleep 48
-# give AWSIM 3 dedicated phys cores (0-2), Autoware the rest - keeps AWSIM lidar at 10Hz
-DK "for p in \$(pgrep -f AWSIM-Demo); do taskset -cp 0-2,8-10 \$p >/dev/null 2>&1; done
-    for p in \$(pgrep -f component_container); do taskset -cp 3-7,11-15 \$p >/dev/null 2>&1; done"
+# CPU isolation IS required (verified 2026-06-29): without it AWSIM shares cores with ~15
+# Autoware components, its sim loop starves -> lidar drops to ~3.5Hz -> distortion
+# "twist too late" -> before_sync stalls -> NDT no input -> never localizes. Give AWSIM its
+# own physical cores -> steady 10Hz lidar -> NDT. (Also stop GPU hogs like stock-bot's nn_main.)
+echo "    pinning AWSIM->phys 0-3 (0-3,8-11), Autoware->phys 4-7 (4-7,12-15)"
+DK "for p in \$(pgrep -f AWSIM-Demo);       do taskset -cp 0-3,8-11 \$p >/dev/null 2>&1; done
+    for p in \$(pgrep -f component_container); do taskset -cp 4-7,12-15 \$p >/dev/null 2>&1; done"
 # Start the relay + perception stub EARLY (right after e2e) so they join the SHM graph and
 # integrate into the diagnostic aggregator. relay: before_sync->concatenated (row_step fix)
 # feeds NDT. perception_stub: empty objects + obstacle pc + clear occupancy grid so the
@@ -107,13 +127,22 @@ DKD "$FASTDDS ulimit -n 65536; source /opt/autoware/setup.bash; python3 /opt/clo
 DKD "$FASTDDS ulimit -n 65536; source /opt/autoware/setup.bash; python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/percstub.log 2>&1"
 sleep 14   # let NDT start matching off the relayed concatenated cloud before seeding
 
-echo "==> [3.5] seed localization (AWSIM gnss pose: Shinjuku MGRS 54SUE x81378 y49917 yaw34)"
+echo "==> [3.5] seed localization (Shinjuku x81378 y49917 yaw34) - service often hangs on SHM,"
+echo "         so ALSO publish /initialpose (the init_pose_adaptor path is more reliable)"
 DK "$FASTDDS . /opt/autoware/setup.bash; ulimit -n 65536
-   timeout 20 ros2 service call /api/localization/initialize autoware_adapi_v1_msgs/srv/InitializeLocalization \
+   timeout 12 ros2 service call /api/localization/initialize autoware_adapi_v1_msgs/srv/InitializeLocalization \
    '{pose: [{header: {frame_id: map}, pose: {pose: {position: {x: 81377.98, y: 49917.33, z: 43.09}, orientation: {z: 0.30071, w: 0.95372}}, covariance: [1,0,0,0,0,0, 0,1,0,0,0,0, 0,0,0.01,0,0,0, 0,0,0,0.01,0,0, 0,0,0,0,0.01,0, 0,0,0,0,0,0.2]}}]}'" >/dev/null 2>&1
+DK "$FASTDDS . /opt/autoware/setup.bash; ulimit -n 65536
+   for i in 1 2 3 4 5; do ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
+   '{header: {frame_id: map}, pose: {pose: {position: {x: 81377.98, y: 49917.33, z: 43.09}, orientation: {z: 0.30071, w: 0.95372}}, covariance: [1,0,0,0,0,0, 0,1,0,0,0,0, 0,0,0.01,0,0,0, 0,0,0,0.01,0,0, 0,0,0,0,0.01,0, 0,0,0,0,0,0.2]}}}' >/dev/null 2>&1; sleep 0.5; done"
 sleep 8
 
-echo "==> [3.6] gateway (Tesla tablet feed, WS :8765 - the primary 3D visualization)"
+echo "==> [3.6] gateway (Tesla tablet feed, WS :8765)"
+# REMOVED awsim_gate_override: it was a workaround for when Autoware couldn't engage. Now that
+# the Discovery Server makes localization+planning work and Autoware engages properly, the
+# override DOUBLE-PUBLISHES /control/command/{control_cmd,gear_cmd} against the real
+# vehicle_cmd_gate -> AWSIM (last-writer-wins) flickers gear DRIVE<->PARK. The real gate alone
+# drives cleanly. (use_emergency_handling:=false already stops the gate's own PARK-on-diag.)
 DKD "$FASTDDS ulimit -n 65536
      export LANELET_OSM=/root/autoware_map/shinjuku/lanelet2_map.osm NIRO_ORIGIN='35.2376422,138.7889491' NIRO_SITE='shinjuku' DISPLAY=:1 XAUTHORITY=/root/.Xauthority
      source /opt/autoware/setup.bash; python3 -u /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
@@ -126,6 +155,6 @@ sleep 4; DISPLAY=:1 wmctrl -a AWSIM 2>/dev/null   # keep AWSIM focused
 
 echo "==> [4/4] status"
 DK "echo 'relay: '\$(grep relayed /tmp/relay.log 2>/dev/null|tail -1)
-    echo 'gateway: '\$(pgrep -fc ros_ws_gateway) ' procs ; perception_stub: '\$(pgrep -fc perception_stub)' procs'
+    echo 'gateway: '\$(pgrep -fc ros_ws_gateway) ' procs ; override: '\$(pgrep -fc awsim_gate_override)' procs ; perception_stub: '\$(pgrep -fc perception_stub)' procs'
     echo 'NDT pose_buffer<2 (stops growing when converged): '\$(grep -c 'pose_buffer_.size() < 2' /tmp/awsim_aw.log)"
 echo "Done. Tablet feed: ws://127.0.0.1:8765/ws  (app: com.keti.awsim_tesla, adb reverse tcp:8765 tcp:8765)"
