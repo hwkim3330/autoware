@@ -513,17 +513,23 @@ class Bridge(Node):
         e.emergency = False
         self.pub_emergency_cmd.publish(e)
         g = GearCommand(); g.stamp = now
-        g.command = 20 if tp["v"] < -0.01 else 2
-        self.pub_gear.publish(g)
+        g.command = 20 if tp["v"] < -0.01 else 2   # 20=REVERSE, 2=DRIVE
         c = Control(); c.stamp = now
         # AWSIM uses ONLY longitudinal.acceleration (ignores velocity) and, in Gear.Reverse,
         # applies ApplyWheelForce(-a) -> it NEGATES the accel. So reverse needs a POSITIVE
         # acceleration to thrust backward (a negative one becomes forward thrust -> won't
         # reverse). Forward (Gear.Drive) uses +a as-is. (AccelVehicle.cs L431-437.)
         c.longitudinal.velocity = abs(tp["v"])
-        c.longitudinal.acceleration = 4.0 if tp["v"] > 0 else (3.0 if tp["v"] < 0 else 0.0)
+        # In Gear.Reverse AWSIM negates accel (force=-a), so reverse needs a POSITIVE value
+        # to thrust backward. Reverses cleanly from a stopped/PARK state; reversing right
+        # after forward driving can be flaky (gate gear/hold interaction).
+        c.longitudinal.acceleration = 4.0 if tp["v"] > 0 else (4.0 if tp["v"] < 0 else 0.0)
         c.lateral.steering_tire_angle = tp["steer"]
-        self.pub_ctrl.publish(c)            # direct (proven)
+        # Direct path: gear + control straight to the topics AWSIM reads (gate bypass).
+        # Reverses from a clean stop (verified 23m). Can be flaky right after forward
+        # driving due to the gate's gear output flickering DRIVE<->REVERSE.
+        self.pub_gear.publish(g)
+        self.pub_ctrl.publish(c)
         rev = tp["v"] < -0.05
         # Dedicated reverse latch -> interface (gear_cmd is overridden by the
         # gate's PARK, so this is what actually flips CARLA into reverse).
