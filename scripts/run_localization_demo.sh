@@ -226,6 +226,11 @@ SUDO docker exec autoware bash -lc \
 CARLAYAML=/opt/autoware/share/autoware_launch/config/system/diagnostics/autoware-carla.yaml
 SUDO docker exec autoware bash -lc \
   "sed -i '/link: \/autoware\/localization\/accuracy }/d; /link: \/autoware\/localization\/sensor_fusion_status }/d' $CARLAYAML" >/dev/null 2>&1 || true
+# Make /autoware/modes/autonomous vacuously-OK: with perception off / scene modules
+# disabled, a perception|planning leaf stays RED -> is_autonomous_mode_available=false
+# -> engage fails ("target mode not available") despite healthy localization+trajectory.
+SUDO docker cp "$REPO/ros/relax_autonomous_diag.py" autoware:/tmp/relax_autonomous_diag.py >/dev/null 2>&1
+SUDO docker exec autoware python3 /tmp/relax_autonomous_diag.py "$CARLAYAML" >/dev/null 2>&1 || true
 # NIRO: the transform_map_to_base_link topic monitor can WEDGE in ERROR after a
 # transient TF gap (route churn during a re-drive) and never recover -- even though
 # map->base_link stays healthy (~20 Hz, ~0.05 s fresh) -- which then gates autonomous
