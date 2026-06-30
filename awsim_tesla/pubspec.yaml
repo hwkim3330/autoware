@@ -66,6 +66,7 @@ flutter:
 
   assets:
     - lib/assets/roii.glb
+    - lib/assets/lowpoly_car.glb
 
   # To add assets to your application, add an assets section, like this:
   # assets:

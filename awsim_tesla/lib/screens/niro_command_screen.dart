@@ -129,6 +129,12 @@ class _NiroCommandScreenState extends ConsumerState<NiroCommandScreen> {
                           top: 14, left: 0, right: 0,
                           child: Center(child: _StatusPill(s: s)),
                         ),
+                        // Tesla-style upcoming traffic light (top-right)
+                        if (s.upcomingLight != null)
+                          Positioned(
+                            top: 14, right: 14,
+                            child: _TrafficLightHud(light: s.upcomingLight!),
+                          ),
                         // MRM red banner
                         if (s.mrm.isNotEmpty)
                           Positioned(
@@ -709,6 +715,64 @@ class _StatusPill extends StatelessWidget {
         Text('· ${s.operationMode}',
             style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.8), fontSize: 12)),
+      ]),
+    );
+  }
+}
+
+// ===========================================================================
+//  Tesla-style upcoming traffic light indicator
+// ===========================================================================
+class _TrafficLightHud extends StatelessWidget {
+  final Map<String, dynamic> light;
+  const _TrafficLightHud({required this.light});
+
+  @override
+  Widget build(BuildContext context) {
+    final int color = (light['color'] is num) ? (light['color'] as num).toInt() : 0;
+    final int dist = (light['dist'] is num) ? (light['dist'] as num).toInt() : 0;
+    const red = Color(0xFFEF4444), amber = Color(0xFFF59E0B), green = Color(0xFF22C55E);
+    Color bulb(int idx) {
+      final on = (idx == 0 && color == 1) || (idx == 1 && color == 2) || (idx == 2 && color == 3);
+      if (!on) return const Color(0xFF1F2937);
+      return [red, amber, green][idx];
+    }
+    final active = color == 1 ? red : (color == 2 ? amber : green);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xF20B1220),
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [BoxShadow(color: active.withValues(alpha: 0.45), blurRadius: 18)],
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          padding: const EdgeInsets.all(5),
+          decoration: BoxDecoration(
+            color: const Color(0xFF111827),
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            for (int i = 0; i < 3; i++)
+              Container(
+                margin: EdgeInsets.only(top: i == 0 ? 0 : 5),
+                width: 16, height: 16,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: bulb(i),
+                  boxShadow: bulb(i) == const Color(0xFF1F2937)
+                      ? null
+                      : [BoxShadow(color: bulb(i).withValues(alpha: 0.8), blurRadius: 10)],
+                ),
+              ),
+          ]),
+        ),
+        const SizedBox(width: 10),
+        Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(color == 1 ? 'RED' : (color == 2 ? 'SLOW' : 'GO'),
+              style: TextStyle(color: active, fontSize: 15, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+          Text('$dist m', style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
+        ]),
       ]),
     );
   }

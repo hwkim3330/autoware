@@ -9,6 +9,17 @@ class DetectedObj {
   bool get isCycle => cls == 5 || cls == 6;
 }
 
+/// A traffic light in map-frame world coords. color: 1=RED 2=AMBER/YELLOW 3=GREEN
+/// (autoware_perception_msgs TrafficLightElement). z is the bulb height (m).
+class TrafficLight {
+  final double x, y, z;
+  final int color, shape;
+  const TrafficLight(this.x, this.y, this.z, this.color, this.shape);
+  bool get isRed => color == 1;
+  bool get isAmber => color == 2;
+  bool get isGreen => color == 3;
+}
+
 /// Live state of the Autoware autonomous stack, parsed from the ROS gateway
 /// WebSocket frame (ros/ros_ws_gateway.py).
 class AutowareState {
@@ -39,6 +50,8 @@ class AutowareState {
   final Map<String, dynamic>? site;  // real-map geo-origin {lat, lon, site} (null in CARLA/Town mode)
   final Map<String, dynamic>? system; // live system monitor {nodes:int, topics:[{n,ok,v}]}
   final List<DetectedObj> objects;   // CenterPoint surround objects (Tesla view)
+  final List<TrafficLight> trafficLights; // nearby traffic lights (map frame)
+  final Map<String, dynamic>? upcomingLight; // {color:int, dist:int} nearest light ahead
 
   // --- read-only HMI gateway schema (carla_niro:8766 / ssu_niro:8765) ---
   // These are null/empty for the existing CARLA gateway frame (which has NO
@@ -82,6 +95,8 @@ class AutowareState {
     this.site,
     this.system,
     this.objects = const [],
+    this.trafficLights = const [],
+    this.upcomingLight,
     this.capabilities,
     this.profile,
     this.hmiSource,
@@ -191,6 +206,15 @@ class AutowareState {
             (m['cls'] is num) ? (m['cls'] as num).toInt() : 0,
             d(m['sx']), d(m['sy']));
       }).toList(),
+      trafficLights: ((j['trafficLights'] ?? []) as List).map<TrafficLight>((o) {
+        final m = o as Map<String, dynamic>;
+        return TrafficLight(d(m['x']), d(m['y']), d(m['z']),
+            (m['color'] is num) ? (m['color'] as num).toInt() : 0,
+            (m['shape'] is num) ? (m['shape'] as num).toInt() : 1);
+      }).toList(),
+      upcomingLight: j['upcomingLight'] is Map
+          ? Map<String, dynamic>.from(j['upcomingLight'] as Map)
+          : null,
     );
   }
 
