@@ -6,7 +6,7 @@ SUDO() { echo 1 | sudo -S "$@" 2>/dev/null; }
 echo "================ ROii Autoware stack status ================"
 echo "--- CARLA ---"
 if pgrep -f CarlaUE4-Linux-Shipping >/dev/null; then
-  echo "  process : UP (pid $(pgrep -f CarlaUE4-Linux-Shipping | head -1), cores $(taskset -cp $(pgrep -f CarlaUE4-Linux-Shipping | head -1) 2>/dev/null | awk '{print $NF}'))"
+  echo "  process : UP (pid $(pgrep -f CarlaUE4-Linux-Shipping | head -1))"
 else
   echo "  process : DOWN"
 fi

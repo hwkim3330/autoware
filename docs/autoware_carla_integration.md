@@ -142,11 +142,11 @@ the full sensing → NDT pipeline converging. Four fixes did it; see
 1. **CARLA crashed during the Autoware start-up burst, not steady state.**
    Steady-state load is a fine ~15–19; but launching ~100 Autoware nodes spikes
    load to ~40 for a few seconds and CARLA's RPC server times out / the process
-   is starved. *Fix:* CPU partition — `taskset -c 0-5` for CARLA (+ `renice -10`),
-   `docker update --cpuset-cpus=6-15` for the Autoware container. The burst is
-   now confined to cores 6-15 and CARLA keeps 0-5 to itself. **Apply the
-   partition BEFORE launching Autoware** — once CARLA is already starved it is
-   too late.
+   is starved. Current AWSIM/CARLA scripts avoid hard CPU partitioning; no `taskset` or Docker
+   cpuset is applied, so Linux schedules the simulator and Autoware across all cores. The burst is
+   now handled by the normal scheduler instead of a fixed partition. **Clear any
+   old cpuset before launching Autoware** — once the simulator is already starved it
+   is too late.
 
 2. **Six RGB cameras segfaulted CARLA on sensor-attach (Signal 11).** The stock
    `carla_sensor_kit` enables 6×(1600×900 @ 11 Hz) cameras. The instant

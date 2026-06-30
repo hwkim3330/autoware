@@ -1,7 +1,7 @@
 #!/bin/bash
 # Autonomous variant of run_localization_demo.sh: perception ON (lidar-based,
 # cameras off in the sensor kit) so behavior planning gets real objects/occupancy
-# -> trajectory -> drive. CPU partition keeps CARLA (cores 0-5) safe.
+# -> trajectory -> drive. No CPU pinning; use all available cores.
 set -u
 TOWN="${1:-Town01}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,11 +14,11 @@ XA=$(tr '\0' '\n' </proc/$GS/environ|grep '^XAUTHORITY='|cut -d= -f2); : "${XA:=
 echo "==> kill perception stub (real perception will replace it)"
 SUDO docker exec autoware bash -lc "pkill -9 -f perception_stub 2>/dev/null; true"
 
-echo "==> [1/4] Boot CARLA on cores 0-5"
+echo "==> [1/4] Boot CARLA without CPU pinning"
 SUDO pkill -9 -f CarlaUE4-Linux-Shipping 2>/dev/null; sleep 4
 for a in 1 2 3 4 5; do
   cd "$CARLA_DIR"
-  setsid taskset -c 0,8 env DISPLAY="$DISP" XAUTHORITY="$XA" \
+  setsid env DISPLAY="$DISP" XAUTHORITY="$XA" \
     ./CarlaUE4-Linux-Shipping CarlaUE4 -RenderOffScreen -quality-level=Low -nosound \
     -carla-rpc-port=2000 </dev/null >/tmp/carla.log 2>&1 & disown
   up=0; for i in $(seq 1 25); do sleep 3; ss -tlnp 2>/dev/null|grep -q :2000 && { up=1; break; }; done
@@ -28,8 +28,8 @@ done
 ss -tlnp 2>/dev/null|grep -q :2000 || { echo "CARLA boot failed"; exit 1; }
 SUDO renice -n -10 -p "$(pgrep -f CarlaUE4-Linux-Shipping|head -1)" >/dev/null 2>&1
 
-echo "==> [2/4] clean container (cpuset 6-15), install configs"
-SUDO docker update --cpuset-cpus="1-7,9-15" autoware >/dev/null 2>&1
+echo "==> [2/4] clean container (all CPUs), install configs"
+SUDO docker update --cpuset-cpus="" autoware >/dev/null 2>&1 || true
 SUDO docker stop autoware >/dev/null 2>&1; SUDO docker start autoware >/dev/null 2>&1; sleep 6
 SUDO docker cp "$REPO/config/fastdds_udp.xml" autoware:/tmp/udp.xml
 SUDO docker cp "$REPO/config/sensor_mapping_lidar_only.yaml" \

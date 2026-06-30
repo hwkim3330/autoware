@@ -1,5 +1,5 @@
 #!/bin/bash
-# Boot CARLA directly into each town (pinned cores, no runtime load_world) and
+# Boot CARLA directly into each town (no CPU pinning, no runtime load_world) and
 # generate a validated CARLA-safe spawn for it. Emits one table line per town.
 set -u
 TOWNS=${1:-"Town03 Town05 Town06 Town07"}
@@ -15,7 +15,7 @@ for TOWN in $TOWNS; do
   ok=0
   for attempt in 1 2 3; do
     cd /opt/carla-simulator/CarlaUE4/Binaries/Linux
-    setsid taskset -c 0,8 env DISPLAY="$DISP" XAUTHORITY="$XA" \
+    setsid env DISPLAY="$DISP" XAUTHORITY="$XA" \
       ./CarlaUE4-Linux-Shipping "$TOWN" -RenderOffScreen -quality-level=Low \
       -nosound -carla-rpc-port=2000 </dev/null >/tmp/carla.log 2>&1 & disown
     for i in $(seq 1 40); do sleep 3; ss -tlnp 2>/dev/null | grep -q :2000 && { ok=1; break; }; done

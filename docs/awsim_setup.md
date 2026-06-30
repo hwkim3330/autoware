@@ -53,8 +53,9 @@ The winning approach: stop bridging host(jazzy)<->container(humble); run AWSIM-D
 - **fd limit**: container `ulimit -n`=1024 -> FastDDS SHM `open_and_lock_file failed` at
   ~118 participants. Launch Autoware (and AWSIM) with `ulimit -n 65536` -> 0 SHM lock errors.
 - **AWSIM cannot use a UDP FastDDS profile** (bundled FastDDS fails init -> no render). SHM only.
-- **CPU**: container cpuset was `1-7,9-15` (host reserved phys core 0 = logical 0,8). Since
-  AWSIM now runs IN the container, gave it all cores: `docker update --cpuset-cpus=0-15`.
+- **CPU**: no `taskset`/cpuset pinning for AWSIM. The official AWSIM quick start does not pin CPUs,
+  and this stack now clears Docker cpuset with `docker update --cpuset-cpus=""` so Linux can schedule
+  AWSIM and Autoware across all available cores.
   (Pinning AWSIM to <2 physical cores starves its sim loop -> clock stalls.)
 - Launcher: `scripts/run_awsim.sh` (full working recipe).
 

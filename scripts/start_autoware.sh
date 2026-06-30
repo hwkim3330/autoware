@@ -10,7 +10,6 @@ TOWN="${1:-Town01}"
 IMAGE="${AUTOWARE_IMAGE:-autoware-ready}"   # falls back below if missing
 MAPS="${HOME}/autoware_map"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-AUTOWARE_CPUSET="${AUTOWARE_CPUSET:-1-7,9-15}"
 
 # Allow the container to use the host X server (rviz).
 GS=$(pgrep -x gnome-shell | head -1)
@@ -20,7 +19,7 @@ DISPLAY=$DISP XAUTHORITY=$XA xhost +local: >/dev/null 2>&1 || true
 
 sudo docker image inspect "$IMAGE" >/dev/null 2>&1 || IMAGE=ghcr.io/autowarefoundation/autoware:universe-cuda
 sudo docker rm -f autoware >/dev/null 2>&1 || true
-sudo docker run -d --name autoware --net host --gpus all --cpuset-cpus="$AUTOWARE_CPUSET" \
+sudo docker run -d --name autoware --net host --gpus all \
   -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=all \
   -e DISPLAY="$DISP" -e XAUTHORITY=/root/.Xauthority \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw -v "$XA":/root/.Xauthority:ro \

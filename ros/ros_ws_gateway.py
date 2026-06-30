@@ -24,6 +24,7 @@ from collections import deque
 
 import rclpy
 from rclpy.node import Node
+from rclpy.clock import Clock, ClockType
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, HistoryPolicy
 from rclpy.parameter import Parameter
 from rclpy.executors import MultiThreadedExecutor
@@ -42,8 +43,10 @@ from autoware_adapi_v1_msgs.srv import (
 )
 from autoware_control_msgs.msg import Control
 from autoware_vehicle_msgs.msg import GearCommand
+from autoware_vehicle_msgs.srv import ControlModeCommand
 from autoware_adapi_v1_msgs.msg import ManualOperatorHeartbeat
 from tier4_control_msgs.msg import GateMode
+from tier4_vehicle_msgs.msg import VehicleEmergencyStamped
 from tier4_control_msgs.srv import SetPause
 
 WS_HOST, WS_PORT, WS_PATH = "0.0.0.0", 8765, "/ws"
@@ -117,11 +120,18 @@ def load_centerlines(path):
         b = m.group(2)
         if 'v="lanelet"' not in b:
             continue
-        L = re.search(r'ref="(-?\d+)" role="left"', b)
-        R = re.search(r'ref="(-?\d+)" role="right"', b)
-        if not (L and R and L.group(1) in wy and R.group(1) in wy):
+        members = {}
+        for mm in re.finditer(r'<member\b([^>]*)>', b):
+            attrs = mm.group(1)
+            role = re.search(r'role="([^"]+)"', attrs)
+            ref = re.search(r'ref="(-?\d+)"', attrs)
+            if role and ref:
+                members[role.group(1)] = ref.group(1)
+        left_ref = members.get("left")
+        right_ref = members.get("right")
+        if not (left_ref and right_ref and left_ref in wy and right_ref in wy):
             continue
-        l, r = wy[L.group(1)], wy[R.group(1)]
+        l, r = wy[left_ref], wy[right_ref]
         k = min(len(l), len(r))
         cl = [((l[i][0] + r[i][0]) / 2, (l[i][1] + r[i][1]) / 2) for i in range(k)]
         # orient by geometry: keep the LEFT boundary on the left of travel
@@ -148,6 +158,74 @@ def load_centerlines(path):
     return pts, polys, lane_by_id
 
 
+def load_traffic_lights(path):
+    """Map a TrafficLightGroupArray's traffic_light_group_id -> (x,y,z) position.
+    In the lanelet2 map a `regulatory_element` relation (subtype=traffic_light) is the
+    group; its `refers` member is a `traffic_light` way whose nodes give the light-bar
+    location. The group id reported by AWSIM == the relation id (we also index by the
+    traffic_light way id as a fallback)."""
+    try:
+        txt = open(path).read().replace("'", '"')
+    except Exception:
+        return {}
+    nd = {}
+    for m in re.finditer(r'<node id="(-?\d+)"[^>]*>(.*?)</node>', txt, re.S):
+        b = m.group(2)
+        x = re.search(r'k="local_x" v="([-\d.]+)"', b)
+        y = re.search(r'k="local_y" v="([-\d.]+)"', b)
+        zt = re.search(r'k="ele" v="([-\d.]+)"', b)
+        if x and y:
+            nd[m.group(1)] = (float(x.group(1)), float(y.group(1)),
+                              float(zt.group(1)) if zt else 5.0)
+    # traffic_light ways -> centroid of their nodes (the light bar)
+    way_pos = {}
+    for m in re.finditer(r'<way id="(-?\d+)"[^>]*>(.*?)</way>', txt, re.S):
+        b = m.group(2)
+        if 'v="traffic_light"' not in b:
+            continue
+        refs = [r for r in re.findall(r'<nd ref="(-?\d+)"', b) if r in nd]
+        if refs:
+            n = len(refs)
+            way_pos[m.group(1)] = (sum(nd[r][0] for r in refs) / n,
+                                   sum(nd[r][1] for r in refs) / n,
+                                   max(nd[r][2] for r in refs))
+    out = dict(way_pos)   # index by traffic_light way id (fallback)
+    # regulatory_element relations (subtype traffic_light): relation id == group id
+    for m in re.finditer(r'<relation id="(-?\d+)"[^>]*>(.*?)</relation>', txt, re.S):
+        b = m.group(2)
+        if 'v="traffic_light"' not in b or 'v="regulatory_element"' not in b:
+            continue
+        refs = []
+        for mm in re.finditer(r'<member\b([^>]*)>', b):
+            a = mm.group(1)
+            role = re.search(r'role="([^"]+)"', a)
+            ref = re.search(r'ref="(-?\d+)"', a)
+            if role and ref and role.group(1) == "refers":
+                refs.append(ref.group(1))
+        ps = [way_pos[r] for r in refs if r in way_pos]
+        if ps:
+            out[m.group(1)] = (sum(p[0] for p in ps) / len(ps),
+                               sum(p[1] for p in ps) / len(ps),
+                               max(p[2] for p in ps))
+    return out
+
+
+def synth_tl_color(x, y, t):
+    """Synthetic traffic-light phase for a light at (x,y). AWSIM-Demo's Shinjuku scene
+    publishes an EMPTY signals topic (no live red/green), so we drive the REAL map lights
+    on a believable cycle: lights are clustered per ~38 m intersection cell and offset so
+    different junctions are out of phase. 22 s cycle: green 0-12, amber 12-14, red 14-22.
+    Returns 1=RED 2=AMBER 3=GREEN."""
+    cell = (round(x / 38.0), round(y / 38.0))
+    off = (abs(cell[0] * 73856093 ^ cell[1] * 19349663) % 22)
+    ph = (t + off) % 22
+    if ph < 12:
+        return 3
+    if ph < 14:
+        return 2
+    return 1
+
+
 class Bridge(Node):
     def __init__(self):
         super().__init__("roii_ws_gateway")
@@ -158,6 +236,15 @@ class Bridge(Node):
         self.cmds = deque()
         self.last_cmd_result = ""
         self.centerlines, self.lane_polys, self.lane_by_id = load_centerlines(MAP_OSM)
+        self.tlpos = load_traffic_lights(MAP_OSM)   # group_id -> (x,y,z) of the light
+        # deduped physical light positions (the map indexes each light by both its way id
+        # and its regulatory-element id -> same spot twice). Used to render/phase lights.
+        _seen = set(); self.tl_points = []
+        for (x, y, z) in self.tlpos.values():
+            key = (round(x, 0), round(y, 0))
+            if key in _seen:
+                continue
+            _seen.add(key); self.tl_points.append((x, y, z))
         self.route_path = []   # full route to goal (lanelet centerlines), for the app
         self.get_logger().info(
             f"loaded {len(self.centerlines)} centerline points, {len(self.lane_polys)} lane polylines")
@@ -225,6 +312,13 @@ class Bridge(Node):
         from sensor_msgs.msg import Image as _Img
         for topic in ("/tensorrt_yolox/out/image", "/sensing/camera/camera0/image_rect_color"):
             self.create_subscription(_Img, topic, self._cam_cb, be)
+        # Traffic-light recognition from AWSIM's traffic_light camera. AWSIM-Demo gives
+        # NO signal states over ROS (V2I + /perception/...signals are empty), so we read
+        # the ACTUAL rendered light off the camera image -> the tablet matches the sim and
+        # the car stops on the real red. Detected colour: 1=RED 2=AMBER 3=GREEN, 0=none.
+        self._cam_tl_color = 0; self._cam_tl_t = 0.0
+        self.create_subscription(_Img, "/sensing/camera/traffic_light/image_raw",
+                                 self._tl_cam_cb, be)
         # per-LiDAR liveness (ROii 4-lidar suite; in 1-lidar mode only front maps)
         self.lidar_part_t = {k: [] for k in
                              ("front", "rear", "side_left", "side_right")}
@@ -245,12 +339,38 @@ class Bridge(Node):
                                      lambda m: self._set("pobjs", m), be)
         except Exception:
             pass
+        # Traffic-light signals (AWSIM ground truth, ~19 Hz). Forwarded to the tablet for
+        # the Tesla-style upcoming-light display; also drives the planner's red-light stop.
+        try:
+            from autoware_perception_msgs.msg import TrafficLightGroupArray
+            self.create_subscription(TrafficLightGroupArray,
+                                     "/perception/traffic_light_recognition/traffic_signals",
+                                     lambda m: self._set("tls", m), be)
+        except Exception:
+            pass
+        # External velocity limit -> lets us stop the car for a red light (the planner
+        # decelerates smoothly to it). AWSIM gives no signal states, so the synthetic
+        # red light ahead drives this. tl QoS = transient_local (the selector latches).
+        self.vlim_pub = None
+        try:
+            from tier4_planning_msgs.msg import VelocityLimit
+            self._VelocityLimit = VelocityLimit
+            qos_tl = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                                history=HistoryPolicy.KEEP_LAST)
+            self.vlim_pub = self.create_publisher(
+                VelocityLimit, "/planning/scenario_planning/max_velocity_default", qos_tl)
+        except Exception:
+            pass
+        self._vlim_now = None      # last published limit (m/s), avoid needless spam
+        self.NORMAL_VLIM = 11.0    # ~40 km/h cruise
         cbg = ReentrantCallbackGroup()
         self.cli_clear = self.create_client(ClearRoute, "/api/routing/clear_route", callback_group=cbg)
         self.cli_route = self.create_client(SetRoutePoints, "/api/routing/set_route_points", callback_group=cbg)
         self.cli_auto = self.create_client(ChangeOperationMode, "/api/operation_mode/change_to_autonomous", callback_group=cbg)
         self.cli_stop = self.create_client(ChangeOperationMode, "/api/operation_mode/change_to_stop", callback_group=cbg)
         self._emergency = False   # set by trigger_emergency, cleared by heal/drive
+        self._cmd_clock = Clock(clock_type=ClockType.SYSTEM_TIME)
         self.create_timer(0.5, self._process_cmds, callback_group=cbg)
         # ---- manual teleop (joystick) ----
         # External (manual joystick) control path: gate EXTERNAL + unpause, then
@@ -259,9 +379,13 @@ class Bridge(Node):
         # ego). We are a second publisher on the gate-output topic; at high rate we
         # win the contention enough to drive. Plus arm the gate EXTERNAL+unpause so
         # the gate itself stops emitting brake.
-        self.pub_ctrl = self.create_publisher(Control, "/control/command/control_cmd", 1)
+        cmd_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                             reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST)
+        self.pub_ctrl = self.create_publisher(Control, "/control/command/control_cmd", cmd_qos)
         self.pub_gate = self.create_publisher(GateMode, "/control/gate_mode_cmd", 1)
-        self.pub_gear = self.create_publisher(GearCommand, "/control/command/gear_cmd", 1)
+        self.pub_gear = self.create_publisher(GearCommand, "/control/command/gear_cmd", cmd_qos)
+        self.pub_emergency_cmd = self.create_publisher(
+            VehicleEmergencyStamped, "/control/command/emergency_cmd", cmd_qos)
         # Manual control bypasses the cmd_gate by publishing actuation directly to
         # the CARLA interface (verified to move the ego). Reverse uses a dedicated
         # latch the gate can't override (gear_cmd is contended by the gate's PARK).
@@ -271,12 +395,18 @@ class Bridge(Node):
         self.pub_manrev = self.create_publisher(_Bool, "/roii/manual_reverse", 1)
         self._Act, self._Bool = _Act, _Bool
         self.cli_pause = self.create_client(SetPause, "/control/vehicle_cmd_gate/set_pause", callback_group=cbg)
+        self.cli_control_mode = self.create_client(
+            ControlModeCommand, "/input/control_mode_request", callback_group=cbg)
         self.teleop = {"v": 0.0, "steer": 0.0, "until": 0.0}
         self._teleop_armed = False
-        self.create_timer(0.01, self._teleop_tick, callback_group=cbg)  # 100 Hz
-        # single thread owns ALL carla client calls (libcarla is not thread-safe)
+        self.create_timer(0.01, self._teleop_tick, callback_group=cbg)  # sim-time backup
+        threading.Thread(target=self._teleop_wall_loop, daemon=True).start()
+        # CARLA direct-control backup is only for CARLA launches. In AWSIM it
+        # repeatedly times out on port 2000 and can starve manual ROS publishing.
         self._carla_lock = threading.Lock()
-        threading.Thread(target=self._carla_loop, daemon=True).start()
+        self._carla_direct = os.environ.get("ENABLE_CARLA_DIRECT", "0") == "1" or bool(CARLA_SPAWN)
+        if self._carla_direct:
+            threading.Thread(target=self._carla_loop, daemon=True).start()
 
     def _arm_teleop(self):
         for _ in range(3):
@@ -284,6 +414,13 @@ class Bridge(Node):
         try:
             req = SetPause.Request(); req.pause = False
             self.cli_pause.call_async(req)
+        except Exception:
+            pass
+        try:
+            if self.cli_control_mode.wait_for_service(timeout_sec=0.2):
+                req = ControlModeCommand.Request()
+                req.mode = ControlModeCommand.Request.AUTONOMOUS
+                self.cli_control_mode.call_async(req)
         except Exception:
             pass
         self._teleop_armed = True
@@ -360,21 +497,33 @@ class Bridge(Node):
             except Exception:
                 self._carla_ego_a = None
 
+    def _teleop_wall_loop(self):
+        while True:
+            time.sleep(0.05)
+            self._teleop_tick()
+
     def _teleop_tick(self):
         with self.lock:
             tp = dict(self.teleop)
         if time.monotonic() > tp["until"]:
             self._teleop_armed = False
             return
-        now = self.get_clock().now().to_msg()
-        c = Control(); c.stamp = now
-        c.longitudinal.velocity = tp["v"]
-        c.longitudinal.acceleration = 2.0 if tp["v"] > 0 else (-2.0 if tp["v"] < 0 else 0.0)
-        c.lateral.steering_tire_angle = tp["steer"]
-        self.pub_ctrl.publish(c)            # direct (proven)
+        now = self._cmd_clock.now().to_msg()
+        e = VehicleEmergencyStamped(); e.stamp = now
+        e.emergency = False
+        self.pub_emergency_cmd.publish(e)
         g = GearCommand(); g.stamp = now
         g.command = 20 if tp["v"] < -0.01 else 2
         self.pub_gear.publish(g)
+        c = Control(); c.stamp = now
+        # AWSIM uses ONLY longitudinal.acceleration (ignores velocity) and, in Gear.Reverse,
+        # applies ApplyWheelForce(-a) -> it NEGATES the accel. So reverse needs a POSITIVE
+        # acceleration to thrust backward (a negative one becomes forward thrust -> won't
+        # reverse). Forward (Gear.Drive) uses +a as-is. (AccelVehicle.cs L431-437.)
+        c.longitudinal.velocity = abs(tp["v"])
+        c.longitudinal.acceleration = 4.0 if tp["v"] > 0 else (3.0 if tp["v"] < 0 else 0.0)
+        c.lateral.steering_tire_angle = tp["steer"]
+        self.pub_ctrl.publish(c)            # direct (proven)
         rev = tp["v"] < -0.05
         # Dedicated reverse latch -> interface (gear_cmd is overridden by the
         # gate's PARK, so this is what actually flips CARLA into reverse).
@@ -383,6 +532,8 @@ class Bridge(Node):
         # which parks/brakes when not engaged). accel for forward; for reverse
         # send brake_cmd -- the interface's reverse patch maps brake->throttle
         # when the reverse latch is set. Verified to move the ego both ways.
+        if not self._carla_direct:
+            return
         mag = min(abs(tp["v"]) / 6.0, 1.0) * 0.6
         a = self._Act(); a.header.stamp = now
         if abs(tp["v"]) < 0.05:
@@ -428,6 +579,33 @@ class Bridge(Node):
         with self.lock:
             self.lidar_t.append(now)
             self.lidar_t = [t for t in self.lidar_t if now - t < 3.0]
+
+    def _tl_cam_cb(self, m):
+        # Detect the dominant traffic-light bulb colour in the upper region of the
+        # traffic_light camera (bright, saturated red/amber/green blob). Throttled ~3 Hz.
+        now = time.monotonic()
+        if now - self._cam_tl_t < 0.33:
+            return
+        self._cam_tl_t = now
+        try:
+            import numpy as np
+            h, w = m.height, m.width
+            buf = np.frombuffer(bytes(m.data), dtype=np.uint8)
+            if m.encoding == "bgr8":
+                img = buf.reshape((h, w, 3)); B, G, R = img[:, :, 0], img[:, :, 1], img[:, :, 2]
+            elif m.encoding == "rgb8":
+                img = buf.reshape((h, w, 3)); R, G, B = img[:, :, 0], img[:, :, 1], img[:, :, 2]
+            else:
+                return
+            top = slice(0, int(h * 0.6))
+            R = R[top].astype(int); G = G[top].astype(int); B = B[top].astype(int)
+            red = int(((R > 170) & (R - G > 70) & (R - B > 70)).sum())
+            grn = int(((G > 165) & (G - R > 50) & (G - B > 40)).sum())
+            yel = int(((R > 185) & (G > 165) & (R - B > 90) & (G - B > 80) & (abs(R - G) < 55)).sum())
+            best = max((red, 1), (yel, 2), (grn, 3), key=lambda x: x[0])
+            self._cam_tl_color = best[1] if best[0] > 40 else 0
+        except Exception:
+            pass
 
     def _cam_cb(self, m):
         # throttle ~6 Hz; downscale to ~360 px wide; JPEG-encode for the tablet.
@@ -906,6 +1084,49 @@ class Bridge(Node):
                                 "yaw": round(math.degrees(yaw + oyaw)),
                                 "cls": int(cls),
                                 "sx": round(max(d.x, 0.5), 1), "sy": round(max(d.y, 0.5), 1)})
+        # traffic lights (AWSIM ground truth) -> world positions from the lanelet map.
+        # Forward nearby lights for the 3D scene + pick the nearest one AHEAD of the ego
+        # as the Tesla-style "upcoming signal" indicator. color: 1=RED 2=AMBER 3=GREEN.
+        traffic_lights = []
+        upcoming_tl = None
+        # REAL light state from the traffic_light camera (matches the AWSIM sim exactly).
+        # The camera only sees lights AHEAD, so we render the map lights in its forward FOV
+        # with the detected colour and skip the ones it can't vouch for (also de-clutters).
+        cam_color = self._cam_tl_color if (time.monotonic() - self._cam_tl_t < 2.0) else 0
+        if converged and self.tl_points:
+            ca, sa = math.cos(yaw), math.sin(yaw)
+            # only the SINGLE nearest light ahead in the FOV matters (the one the car is
+            # approaching) -> show just that one, coloured by the camera. Avoids clutter.
+            best = None; best_fwd = 1e9
+            for (gx, gy, gz) in self.tl_points:
+                dx, dy = gx - ego["x"], gy - ego["y"]
+                fwd = dx * ca + dy * sa
+                rgt = -dx * sa + dy * ca
+                if 3 < fwd < 70 and abs(rgt) < 16 and fwd < best_fwd:
+                    best_fwd = fwd; best = (gx, gy, gz)
+            if best is not None:
+                gx, gy, gz = best
+                traffic_lights.append({"x": round(gx, 1), "y": round(gy, 1),
+                                       "z": round(gz, 1), "color": cam_color, "shape": 1})
+                if cam_color:
+                    upcoming_tl = {"color": cam_color, "dist": round(best_fwd)}
+        # Realistic red-light behaviour: when autonomous and a RED is within stopping
+        # range ahead, drop the external velocity limit to 0 (planner brakes smoothly);
+        # otherwise restore cruise so the car proceeds (incl. on green). Pure stop-line
+        # behaviour without touching the planning launch.
+        if self.vlim_pub is not None:
+            cur_mode = s["op"][0].mode if "op" in s else 0
+            want = self.NORMAL_VLIM
+            if cur_mode == 2 and upcoming_tl and upcoming_tl["color"] == 1 \
+                    and upcoming_tl["dist"] <= 28:
+                want = 0.0
+            if want != self._vlim_now:
+                self._vlim_now = want
+                vl = self._VelocityLimit()
+                vl.stamp = self.get_clock().now().to_msg()
+                vl.max_velocity = float(want)
+                vl.sender = "roii_gateway_tl"
+                self.vlim_pub.publish(vl)
         loc_init = s["loc"][0].state if "loc" in s else 0
         op = s["op"][0].mode if "op" in s else 0
         op_avail = bool(s["op"][0].is_autonomous_mode_available) if "op" in s else False
@@ -1001,6 +1222,8 @@ class Bridge(Node):
             "roii": (json.loads(s["roii_health"][0].data)
                      if "roii_health" in s and fresh("roii_health", 3) else None),
             "objects": objects,
+            "trafficLights": traffic_lights,
+            "upcomingLight": upcoming_tl,
             "sensors": sensors, "parts": parts, "faults": faults,
             "sensorSuite": {"lidars": len(ROII_LIDARS), "radars": len(ROII_RADARS),
                             "simulated": 4, "cameras": 0},

@@ -5,9 +5,8 @@
 # the sensing -> NDT -> localization pipeline converge without CARLA crashing.
 #
 # The four fixes that made it work (see docs/autoware_carla_integration.md):
-#   1. CPU partition   - CARLA pinned to cores 0,8 (HT pair), container 1-7,9-15,
-#                        so the Autoware start-up burst (load ~40) cannot starve
-#                        CARLA's RPC server.
+#   1. CPU scheduling   - no taskset/cpuset pinning; let Linux schedule CARLA and
+#                        Autoware across all available cores.
 #   2. UDP-only DDS     - config/fastdds_udp.xml disables SHM transport; kills the
 #                        fastrtps_port7411 lock that blocked ros2 CLI diagnostics.
 #   3. Lidar-only kit   - config/sensor_mapping_lidar_only.yaml; 6 cameras made
@@ -82,7 +81,7 @@ boot_carla() {
   SUDO pkill -9 -f CarlaUE4-Linux-Shipping 2>/dev/null; sleep 4
   for attempt in 1 2 3 4 5; do
     cd "$CARLA_DIR"
-    setsid taskset -c 0,8 env DISPLAY="$DISP" XAUTHORITY="$XA" \
+    setsid env DISPLAY="$DISP" XAUTHORITY="$XA" \
       ./CarlaUE4-Linux-Shipping "$TOWN" -RenderOffScreen -quality-level=Low \
       -nosound -carla-rpc-port=2000 </dev/null >/tmp/carla.log 2>&1 & disown
     up=0; for i in $(seq 1 25); do sleep 3; ss -tlnp 2>/dev/null | grep -q :2000 && { up=1; break; }; done
@@ -92,12 +91,12 @@ boot_carla() {
   return 1
 }
 
-echo "==> [1/5] Boot CARLA on cores 0,8 (one HT pair; retry until RPC stays up)"
+echo "==> [1/5] Boot CARLA without CPU pinning (retry until RPC stays up)"
 boot_carla || { echo "CARLA failed to boot"; exit 1; }
 SUDO renice -n -10 -p "$(pgrep -f CarlaUE4-Linux-Shipping | head -1)" >/dev/null 2>&1
 
-echo "==> [2/5] Pin Autoware container to cores 6-15, install configs (LIDARS=${LIDARS:-1})"
-SUDO docker update --cpuset-cpus="1-7,9-15" autoware >/dev/null 2>&1
+echo "==> [2/5] Use all CPUs for Autoware container, install configs (LIDARS=${LIDARS:-1})"
+SUDO docker update --cpuset-cpus="" autoware >/dev/null 2>&1 || true
 SUDO docker cp "$REPO/config/fastdds_udp.xml" autoware:/tmp/udp.xml >/dev/null 2>&1
 
 # LiDAR suite: default = ROii 4-LiDAR (front/rear G32 directional + side rotating
