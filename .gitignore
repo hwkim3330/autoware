@@ -27,3 +27,5 @@ autoware-contents/
 awsim_tesla/build/
 awsim_tesla/.dart_tool/
 awsim_tesla/android/.gradle/
+soongsil/soongsil_hmi/build/
+soongsil/soongsil_hmi/.dart_tool/
