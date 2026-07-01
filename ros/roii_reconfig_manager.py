@@ -18,7 +18,7 @@
   - gateway로 재구성 상태 전달 → 태블릿 시각화
 
 Status:
-  /roii/reconfig_status  (std_msgs/String, JSON) — 1 Hz
+  /roii/driving_mode  (std_msgs/String, JSON) — 1 Hz
 """
 
 import json
@@ -59,17 +59,74 @@ class ReconfigManager(Node):
         self._last_report = None
         self._mode = "NORMAL"
         self._prev_mode = "NORMAL"
-        # 장애 이벤트 이력 (최대 20개)
         self._history = collections.deque(maxlen=20)
 
-        self.create_subscription(String, "/roii/fault_report", self._on_report, 1)
+        # 모든 구독 제거 — DDS ExternalShutdown 방지
+        # fault detection은 내장 타이머 기반 publisher count로만
+        self._injector_status = {}
 
-        self.pub_status  = self.create_publisher(String, "/roii/reconfig_status", 1)
+        self.pub_status  = self.create_publisher(String, "/roii/driving_mode", 1)
         self.pub_inject  = self.create_publisher(String, "/multimode/inject", 1)
         self.pub_niro_f  = self.create_publisher(Bool, "/test/fault_injection/lidar", 1)
 
         self.create_timer(1.0, self._tick)
-        self.get_logger().info("ROii reconfiguration manager up")
+        self.get_logger().info("ROii reconfiguration manager up (with built-in fault detection)")
+
+    def _on_injector_status(self, msg):
+        try:
+            self._injector_status = json.loads(msg.data)
+        except Exception:
+            pass
+
+    def _detect_faults(self):
+        """publisher count 기반 장애 감지 — 메시지 구독 없이 안전하게."""
+        inj = self._injector_status
+
+        # 라이다: injector mode로 개별 판단
+        sensors = {}
+        active = 0
+        for s in LIDARS:
+            mode = inj.get(s, {}).get("mode", "normal") if inj else "normal"
+            if mode == "normal":
+                # publisher count로 토픽 존재 확인
+                pubs = self.count_publishers(f"/sensing/lidar/{s}/pointcloud_before_sync")
+                fault = "NONE" if pubs > 0 else "STALE"
+            else:
+                fault = mode.upper()
+            sensors[s] = {"fault": fault, "rate_hz": 0.0}
+            if fault == "NONE":
+                active += 1
+
+        sensors["gnss"] = {
+            "fault": "NONE" if self.count_publishers("/sensing/gnss/pose_with_covariance") > 0
+                     else "STALE",
+            "rate_hz": 0.0, "cov_m2": 0.0,
+        }
+        sensors["imu"] = {
+            "fault": "NONE" if self.count_publishers("/sensing/imu/imu_data") > 0
+                     else "STALE",
+            "rate_hz": 0.0,
+        }
+
+        modules = {
+            "localization": {
+                "fault": "NONE" if self.count_publishers("/localization/kinematic_state") > 0
+                         else "STALE", "rate_hz": 0.0},
+            "planning": {
+                "fault": "NONE" if self.count_publishers("/planning/scenario_planning/trajectory") > 0
+                         else "STALE", "rate_hz": 0.0},
+            "control": {
+                "fault": "NONE" if self.count_publishers("/control/command/control_cmd") > 0
+                         else "STALE", "rate_hz": 0.0},
+        }
+
+        report = {
+            "ts": time.time(), "sensors": sensors,
+            "modules": modules, "active_lidars": active,
+        }
+        with self.lock:
+            self._last_report = report
+        self._evaluate(report)
 
     def _on_report(self, msg):
         try:

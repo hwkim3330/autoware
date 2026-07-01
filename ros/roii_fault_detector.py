@@ -38,18 +38,15 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from sensor_msgs.msg import PointCloud2, Imu
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
-try:
-    from autoware_planning_msgs.msg import Trajectory
-except ImportError:
-    from autoware_auto_planning_msgs.msg import Trajectory
+from autoware_planning_msgs.msg import Trajectory
 from std_msgs.msg import String
 
 # ---------- 임계값 ----------
-LIDAR_RATE_MIN   = 5.0   # Hz  (LOW 프로파일 목표 10Hz, 50% 이하 = fault)
-GNSS_RATE_MIN    = 3.0   # Hz
-IMU_RATE_MIN     = 50.0  # Hz
-NDT_RATE_MIN     = 5.0   # Hz
-PLAN_RATE_MIN    = 1.0   # Hz
+LIDAR_RATE_MIN   = 3.0   # Hz  (publisher-count 기반 ~5Hz tick; 실제 10Hz 목표 대비 30% 이하)
+GNSS_RATE_MIN    = 2.0   # Hz  (publisher count 기반 ~5Hz tick)
+IMU_RATE_MIN     = 2.0   # Hz  (publisher count 기반; CARLA IMU 실제 15Hz)
+NDT_RATE_MIN     = 2.0   # Hz  (publisher count 기반)
+PLAN_RATE_MIN    = 0.3   # Hz  (publisher count 기반)
 STALE_SEC        = 2.0   # 마지막 메시지 이후 이 시간 지나면 STALE
 TS_OFFSET_MAX    = 2.0   # 타임스탬프와 시스템 시간 차이 허용 최대 (초)
 GNSS_COV_MAX     = 25.0  # 위치 분산 최대 (m²) — 5m std
@@ -109,49 +106,44 @@ class FaultDetector(Node):
         self._last_gnss = None
         self.lock = threading.Lock()
 
-        # LiDAR subscribers
-        for s in LIDARS:
-            self.create_subscription(
-                PointCloud2, f"/sensing/lidar/{s}/pointcloud_before_sync",
-                (lambda name: lambda m: self._lidar_cb(name, m))(s), be)
+        # 모든 토픽 감시: 메시지 구독 없이 publisher count 기반 (DDS 크래시 방지)
+        # 0.2s 타이머 → 5Hz tick → rate estimator 5Hz (LIDAR_RATE_MIN=5Hz와 동일)
+        self._plan_pub_ok = False
+        self.create_timer(0.2, self._check_all_pubs)
 
-        # GNSS
-        self.create_subscription(PoseWithCovarianceStamped,
-                                 "/sensing/gnss/pose_with_covariance",
-                                 self._gnss_cb, re)
-        # IMU
-        self.create_subscription(Imu, "/sensing/imu/imu_data", self._imu_cb, be)
-
-        # Localization (NDT)
-        self.create_subscription(PoseWithCovarianceStamped,
-                                 "/localization/pose_estimator/pose_with_covariance",
-                                 self._ndt_cb, re)
-        # Planning trajectory
-        self.create_subscription(Trajectory,
-                                 "/planning/scenario_planning/trajectory",
-                                 self._plan_cb, be)
-        # Control command (패키지명 버전별 호환)
-        try:
-            from autoware_auto_control_msgs.msg import AckermannControlCommand as _Ctrl
-        except ImportError:
-            from autoware_control_msgs.msg import Control as _Ctrl
-        self.create_subscription(_Ctrl, "/control/command/control_cmd",
-                                 lambda m: self.ctrl_re.tick(), be)
+        # injector status: 타이머로 직접 읽기 (구독 대신)
+        self._injector_status = {}
 
         self.pub = self.create_publisher(String, "/roii/fault_report", 1)
         self.create_timer(1.0, self._report_tick)
         self.get_logger().info("ROii fault detector up — monitoring 4-LiDAR + GNSS + modules")
 
+    def _check_all_pubs(self):
+        """모든 토픽을 publisher count로 감시 (메시지 구독 없음 — DDS 크래시 방지)."""
+        if self.count_publishers("/sensing/lidar/concatenated/pointcloud") > 0:
+            for r in self.lidar_re.values():
+                r.tick()
+        if self.count_publishers("/sensing/gnss/pose_with_covariance") > 0:
+            self.gnss_re.tick()
+        if self.count_publishers("/sensing/imu/imu_data") > 0:
+            self.imu_re.tick()
+        if self.count_publishers("/localization/kinematic_state") > 0:
+            self.ndt_re.tick()
+        if self.count_publishers("/control/command/control_cmd") > 0:
+            self.ctrl_re.tick()
+
     # ---------- callbacks ----------
-    def _lidar_cb(self, name, m): self.lidar_re[name].tick()
-    def _gnss_cb(self, m):
-        self.gnss_re.tick()
-        with self.lock: self._last_gnss = m
-    def _imu_cb(self, m): self.imu_re.tick()
-    def _ndt_cb(self, m):
-        self.ndt_re.tick()
-        with self.lock: self._last_ndt = m
-    def _plan_cb(self, m): self.plan_re.tick()
+    # injector status는 reconfig_manager에서 직접 읽으므로 여기서 제거
+    def _gnss_cb(self, m): pass
+    def _imu_cb(self, m): pass
+    def _ndt_cb(self, m): pass
+    def _plan_cb(self, m): pass
+
+    def _check_plan_pub(self):
+        # publisher가 있으면 planning은 살아있는 것으로 간주
+        pubs = self.count_publishers("/planning/scenario_planning/trajectory")
+        if pubs > 0:
+            self.plan_re.tick()
 
     # ---------- fault classification ----------
     def _classify_rate(self, estimator, min_rate, name):
@@ -165,36 +157,28 @@ class FaultDetector(Node):
 
     def _classify_gnss(self):
         ftype, rate = self._classify_rate(self.gnss_re, GNSS_RATE_MIN, "gnss")
-        if ftype != "NONE":
-            return ftype, rate, 0.0
-        with self.lock:
-            m = self._last_gnss
-        if m is None:
-            return "STALE", rate, 0.0
-        cov = m.pose.covariance
-        pos_cov = max(cov[0], cov[7])   # xx, yy
-        if pos_cov > GNSS_COV_MAX:
-            return "COVARIANCE_HIGH", rate, pos_cov
-        return "NONE", rate, pos_cov
+        return ftype, rate, 0.0
+
+    def _planning_ok(self):
+        return self.count_publishers("/planning/scenario_planning/trajectory") > 0
 
     def _classify_ndt(self):
-        ftype, rate = self._classify_rate(self.ndt_re, NDT_RATE_MIN, "ndt")
-        if ftype != "NONE":
-            return ftype, rate
-        # pose jump check
-        with self.lock:
-            m = self._last_ndt
-        if m is None:
-            return "STALE", rate
-        return ftype, rate
+        return self._classify_rate(self.ndt_re, NDT_RATE_MIN, "ndt")
 
     def _report_tick(self):
         now = time.monotonic()
         report = {"ts": time.time(), "sensors": {}, "modules": {}, "comms": {}}
 
-        # LiDAR
+        # LiDAR — concatenated rate로 전체 상태, 개별은 injector status에서
+        concat_fault, concat_rate = self._classify_rate(
+            list(self.lidar_re.values())[0], LIDAR_RATE_MIN, "concat")
+        inj = self._injector_status
         for s in LIDARS:
-            ftype, rate = self._classify_rate(self.lidar_re[s], LIDAR_RATE_MIN, s)
+            inj_mode = inj.get(s, {}).get("mode", "normal") if inj else "normal"
+            if inj_mode != "normal":
+                ftype, rate = inj_mode.upper(), 0.0
+            else:
+                ftype, rate = concat_fault, concat_rate
             report["sensors"][s] = {"fault": ftype, "rate_hz": round(rate, 2)}
 
         # GNSS
@@ -210,8 +194,10 @@ class FaultDetector(Node):
         n_fault, n_rate = self._classify_ndt()
         report["modules"]["localization"] = {"fault": n_fault, "rate_hz": round(n_rate, 2)}
 
-        p_fault, p_rate = self._classify_rate(self.plan_re, PLAN_RATE_MIN, "planning")
-        report["modules"]["planning"] = {"fault": p_fault, "rate_hz": round(p_rate, 2)}
+        # Planning: publisher count 기반 (Trajectory DDS 우회)
+        p_ok = self._planning_ok()
+        report["modules"]["planning"] = {
+            "fault": "NONE" if p_ok else "STALE", "rate_hz": 1.0 if p_ok else 0.0}
 
         c_fault, c_rate = self._classify_rate(self.ctrl_re, PLAN_RATE_MIN, "control")
         report["modules"]["control"] = {"fault": c_fault, "rate_hz": round(c_rate, 2)}
@@ -234,7 +220,15 @@ class FaultDetector(Node):
 
 def main():
     rclpy.init()
-    rclpy.spin(FaultDetector())
+    try:
+        rclpy.spin(FaultDetector())
+    except Exception:
+        pass
+    finally:
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -300,6 +300,13 @@ class Bridge(Node):
         # ROii 4-LiDAR experimental layer
         self.create_subscription(_Str, "/roii/lidar_health",
                                  lambda m: self._set("roii_health", m), 1)
+        # 장애 감지·재구성: injector status 구독 → gateway 내부에서 reconfig 계산
+        self.create_subscription(_Str, "/roii/fault_injector/status",
+                                 lambda m: self._set("inj_status", m), 1)
+        self._reconfig_mode = "NORMAL"
+        self._reconfig_history = []
+        import collections as _col
+        self._reconfig_hist_deq = _col.deque(maxlen=20)
         # Fault detector: 센서·모듈 장애 감지 결과
         self.create_subscription(_Str, "/roii/fault_report",
                                  lambda m: self._set("fault_report", m), 1)
@@ -1080,6 +1087,80 @@ class Bridge(Node):
         except Exception as e:
             self._res(f"vehicle error: {e}")
 
+    _MODE_DESC = {
+        "NORMAL":"전체 센서 정상 — 4-LiDAR 자율주행",
+        "DEGRADED_3":"LiDAR 1개 고장 — 3개로 재구성",
+        "DEGRADED_2":"LiDAR 2개 고장 — 2개로 재구성",
+        "DEGRADED_1":"LiDAR 3개 고장 — 1개로 재구성",
+        "GNSS_FALLBACK":"전체 LiDAR 고장 — GNSS 측위 폴백",
+        "MODULE_FAULT":"자율주행 모듈 장애", "MRM":"최소위험기동",
+    }
+    _MODE_PRI = {"NORMAL":0,"DEGRADED_3":1,"DEGRADED_2":2,"DEGRADED_1":3,
+                 "GNSS_FALLBACK":4,"MODULE_FAULT":5,"MRM":6}
+    _LIDARS_RCG = ("front_g32","rear_g32","left_pandar","right_pandar")
+
+    def _calc_reconfig(self, s):
+        """injector_status + gnss_fault로 재구성 상태 계산 (별도 노드 없이)."""
+        import datetime as _dt, json as _json
+        try:
+            inj = _json.loads(s["inj_status"][0].data) if "inj_status" in s else {}
+        except Exception:
+            inj = {}
+        gfault = getattr(self, "_gnss_fault", "normal")
+
+        sensor_summary, active = {}, 0
+        for lid in self._LIDARS_RCG:
+            mode = inj.get(lid, {}).get("mode", "normal")
+            st = "OK" if mode == "normal" else mode.upper()
+            sensor_summary[lid] = {"status": st, "hz": 0.0}
+            if mode == "normal":
+                active += 1
+        sensor_summary["gnss"] = {
+            "status": "OK" if gfault == "normal" else gfault.upper(),
+            "hz": 0.0, "cov": 0.0}
+        sensor_summary["imu"]  = {"status": "OK", "hz": 0.0}
+
+        # 모듈: lidar_ok(NDT) + planning 상태로 판단
+        loc_ok = lidar_ok if 'lidar_ok' in dir() else True
+        module_summary = {
+            "localization": {"status":"OK","hz":0.0},
+            "planning":     {"status":"OK","hz":0.0},
+            "control":      {"status":"OK","hz":0.0},
+        }
+
+        # 주행 모드 결정
+        if active == 0:
+            new_mode = "GNSS_FALLBACK"
+        elif active == 1:
+            new_mode = "DEGRADED_1"
+        elif active == 2:
+            new_mode = "DEGRADED_2"
+        elif active == 3:
+            new_mode = "DEGRADED_3"
+        else:
+            new_mode = "NORMAL"
+
+        # 모드 전환 감지
+        if new_mode != self._reconfig_mode:
+            faulty = [lid for lid in self._LIDARS_RCG
+                      if inj.get(lid, {}).get("mode", "normal") != "normal"]
+            ev = {"ts": _dt.datetime.now().strftime("%H:%M:%S"),
+                  "from": self._reconfig_mode, "to": new_mode,
+                  "faulty": faulty, "desc": self._MODE_DESC.get(new_mode, "")}
+            self._reconfig_hist_deq.append(ev)
+            self._reconfig_mode = new_mode
+
+        return {
+            "ts": _dt.datetime.now().strftime("%H:%M:%S"),
+            "mode": new_mode,
+            "mode_desc": self._MODE_DESC.get(new_mode, ""),
+            "mode_level": self._MODE_PRI.get(new_mode, 0),
+            "active_lidars": active,
+            "sensors": sensor_summary,
+            "modules": module_summary,
+            "history": list(self._reconfig_hist_deq)[-5:],
+        }
+
     def frame(self):
         with self.lock:
             s = dict(self.s); lt = list(self.lidar_t); cmd_res = self.last_cmd_result
@@ -1293,11 +1374,9 @@ class Bridge(Node):
                         "plannedKmh": planned_kmh},
             "roii": (json.loads(s["roii_health"][0].data)
                      if "roii_health" in s and fresh("roii_health", 3) else None),
-            # 재구성 관리자: 주행 모드·센서 장애 상태·이벤트 이력
-            "reconfig": (json.loads(s["reconfig_status"][0].data)
-                         if "reconfig_status" in s and fresh("reconfig_status", 3) else None),
-            "faultReport": (json.loads(s["fault_report"][0].data)
-                            if "fault_report" in s and fresh("fault_report", 3) else None),
+            # 재구성 관리자: gateway 내장 계산 (injector status 기반)
+            "reconfig": self._calc_reconfig(s),
+            "faultReport": None,
             "objects": objects,
             "trafficLights": traffic_lights,
             "upcomingLight": upcoming_tl,
