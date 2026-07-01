@@ -22,6 +22,15 @@ class AutowareState {
   final String mrm;              // '' or MRM state
   final double plannedKmh;       // planner target speed at ego
   final Map<String, dynamic>? roii;  // ROii 4-lidar health (null unless roii mode)
+  final Map<String, dynamic>? multimode; // 이중측위: {lidar:{x,y}, gnss:{x,y}, gapM, active}
+
+  // multimode (dual-localization) helpers
+  List<double>? get lidarPos => (multimode?['lidar'] is Map)
+      ? [ (multimode!['lidar']['x'] as num).toDouble(), (multimode!['lidar']['y'] as num).toDouble() ] : null;
+  List<double>? get gnssPos => (multimode?['gnss'] is Map)
+      ? [ (multimode!['gnss']['x'] as num).toDouble(), (multimode!['gnss']['y'] as num).toDouble() ] : null;
+  double? get locGapM => (multimode?['gapM'] is num) ? (multimode!['gapM'] as num).toDouble() : null;
+  String get activeMode => multimode?['active']?.toString() ?? locMode;
 
   const AutowareState({
     required this.ts,
@@ -49,6 +58,7 @@ class AutowareState {
     this.mrm = '',
     this.plannedKmh = 0,
     this.roii,
+    this.multimode,
   });
 
   bool get isAutonomous => operationMode == 'AUTONOMOUS';
@@ -90,6 +100,7 @@ class AutowareState {
       mrm: veh['mrm']?.toString() ?? '',
       plannedKmh: d(veh['plannedKmh']),
       roii: j['roii'] is Map ? Map<String, dynamic>.from(j['roii']) : null,
+      multimode: j['multimode'] is Map ? Map<String, dynamic>.from(j['multimode']) : null,
     );
   }
 

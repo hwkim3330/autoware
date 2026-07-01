@@ -95,6 +95,12 @@ class StatusOverlay extends StatelessWidget {
           _kv('Localization', s.localized ? '${s.locMode}  ✓' : 'NOT CONVERGED',
               s.localized ? _ok : _warn),
           _kv('NDT rate', '${s.ndtHz.toStringAsFixed(1)} Hz', _accent),
+          // 이중측위 (dual-localization): LiDAR-only vs GNSS-only agreement
+          if (s.locGapM != null) ...[
+            _kv('이중측위', s.activeMode, _ok),
+            _kv('LiDAR↔GNSS 편차', '${s.locGapM!.toStringAsFixed(2)} m',
+                s.locGapM! < 1.0 ? _ok : _warn),
+          ],
           _kv('Route', s.routeState, s.routeState == 'SET' ? _ok : Colors.white70),
         ],
       ),

@@ -109,6 +109,10 @@ class _LeftPanel extends StatelessWidget {
         const SizedBox(height: 10),
         _Trip('Localization', s.locMode, s.locMode == 'LIDAR_GNSS' ? kGreen : (s.locMode == 'GNSS_IMU' ? kAmber : kLo)),
         _Trip('NDT', '${s.ndtHz.toStringAsFixed(1)} Hz', s.localized ? kGreen : kRed),
+        // 이중측위 (dual-localization): LiDAR-only vs GNSS-only agreement (Soongsil)
+        if (s.locGapM != null)
+          _Trip('LiDAR↔GNSS', '${s.locGapM!.toStringAsFixed(2)} m',
+              s.locGapM! < 1.0 ? kGreen : (s.locGapM! < 3.0 ? kAmber : kRed)),
         _Trip('Route', s.routeState, s.routeState == 'SET' ? kGreen : kLo),
         _Trip('Trajectory', s.trajPoints > 0 ? '${s.trajPoints} pts' : '—', s.trajPoints > 0 ? kGreen : kLo),
         const SizedBox(height: 10),
