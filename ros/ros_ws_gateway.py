@@ -253,6 +253,13 @@ class Bridge(Node):
                         reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST)
         self.create_subscription(Odometry, "/localization/kinematic_state",
                                  lambda m: self._set("odom", m), 10)
+        # Multimode (이중측위): LiDAR-only vs GNSS-only localization, published separately by
+        # the pose_twist_fusion_filter. Forwarded so the tablet can show both + their gap.
+        be2 = QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST)
+        self.create_subscription(Odometry, "/localization/pose_twist_fusion_filter/lidar/kinematic_state",
+                                 lambda m: self._set("odom_lidar", m), be2)
+        self.create_subscription(Odometry, "/localization/pose_twist_fusion_filter/gnss/kinematic_state",
+                                 lambda m: self._set("odom_gnss", m), be2)
         self.create_subscription(OperationModeState, "/api/operation_mode/state",
                                  lambda m: self._set("op", m), tl)
         self.create_subscription(RouteState, "/api/routing/state",
@@ -1208,10 +1215,21 @@ class Bridge(Node):
                 {"n": "vehicle", "ok": fresh("steer"), "v": f"{steer_deg:.0f}°"},
             ],
         }
+        # multimode (이중측위): LiDAR-only + GNSS-only ego positions and their gap
+        def _pos(k):
+            if k in s and (time.monotonic() - s[k][1] < 2.0):
+                p = s[k][0].pose.pose.position
+                return {"x": round(p.x, 2), "y": round(p.y, 2)}
+            return None
+        el = _pos("odom_lidar"); eg = _pos("odom_gnss")
+        gap = round(math.hypot(el["x"] - eg["x"], el["y"] - eg["y"]), 2) if (el and eg) else None
+        multimode = {"lidar": el, "gnss": eg, "gapM": gap,
+                     "active": "LIDAR_GNSS" if (el and eg) else ("LIDAR" if el else ("GNSS" if eg else "NONE"))}
         return {
             "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "source": "AUTOWARE_LIVE",
             "site": MAP_ORIGIN,
+            "multimode": multimode,
             "ego": ego,
             "niro": niro,
             "system": system,
