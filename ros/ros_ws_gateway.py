@@ -19,7 +19,7 @@ App -> gateway commands (JSON):  {"cmd": "drive"|"stop"|"clear"}
   stop  : change to STOP mode
   clear : clear the route
 """
-import asyncio, json, math, time, threading, datetime, re, os
+import asyncio, json, math, time, threading, datetime, re, os, logging
 from collections import deque
 
 import rclpy
@@ -50,6 +50,12 @@ from tier4_vehicle_msgs.msg import VehicleEmergencyStamped
 from tier4_control_msgs.srv import SetPause
 
 WS_HOST, WS_PORT, WS_PATH = "0.0.0.0", 8765, "/ws"
+# The tablet/adb-reverse churn opens TCP probes that never finish the WS handshake;
+# the websockets lib handles them fine (server keeps running) but logs a full
+# traceback each time, flooding gw.log and looking like the gateway "broke". These
+# are benign -> silence the handshake-failure logger so real messages stay visible.
+logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
+logging.getLogger("websockets").setLevel(logging.CRITICAL)
 MAP_OSM = os.environ.get("LANELET_OSM", "/root/autoware_map/Town01/lanelet2_map.osm")
 # CARLA spawn "x, y, z, roll, pitch, yaw" (CARLA coords) -- for the respawn cmd
 CARLA_SPAWN = os.environ.get("CARLA_SPAWN", "")
@@ -1374,7 +1380,10 @@ async def main():
     print("Autoware ROS <-> ROii Monitor gateway (with drive control)")
     print(f"  ws://<host>:{WS_PORT}{WS_PATH}   (USB: adb reverse tcp:{WS_PORT} tcp:{WS_PORT})")
     print("=" * 56)
-    async with websockets.serve(handler, WS_HOST, WS_PORT):
+    # ping_interval keeps tablet links alive and reaps half-open/stale connections
+    # (prevents ESTAB pile-up); close_timeout bounds shutdown of dropped clients.
+    async with websockets.serve(handler, WS_HOST, WS_PORT,
+                                ping_interval=20, ping_timeout=20, close_timeout=5):
         await asyncio.gather(producer(), camera_producer())
 
 
