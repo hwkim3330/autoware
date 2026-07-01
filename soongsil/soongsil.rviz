@@ -1,124 +1,55 @@
 Panels:
   - Class: rviz_common/Displays
     Name: Displays
-    Property Tree Widget:
-      Expanded: ~
-    Help Height: 0
 Visualization Manager:
-  Class: ""
+  Global Options:
+    Fixed Frame: map
+    Background Color: 20; 22; 28
+    Frame Rate: 20
   Displays:
     - Class: rviz_default_plugins/Grid
       Name: Grid
-      Color: "; 80 80 80"
-      Cell Size: 5
-      Plane Cell Count: 200
       Enabled: true
+      Color: 60; 60; 70
+      Plane Cell Count: 60
+      Cell Size: 5
     - Class: rviz_default_plugins/TF
       Name: TF
-      Enabled: false
-      Marker Scale: 3
+      Enabled: true
       Show Names: false
-    # --- Pointcloud map (NDT reference) ---
-    - Class: rviz_default_plugins/PointCloud2
-      Name: PointCloudMap
-      Topic:
-        Value: /map/pointcloud_map
-        Depth: 5
-        Durability Policy: Transient Local
-        Reliability Policy: Reliable
-      Color Transformer: AxisColor
-      Axis: Z
-      Autocompute Value Bounds: true
-      Size (m): 0.25
-      Style: Flat Squares
-      Enabled: true
-    # --- Vector (lanelet2) map ---
-    - Class: rviz_default_plugins/MarkerArray
-      Name: VectorMap
-      Topic:
-        Value: /map/vector_map_marker
-        Depth: 5
-        Durability Policy: Transient Local
-        Reliability Policy: Reliable
-      Enabled: true
-    # --- Live LiDAR scan ---
+      Marker Scale: 3
     - Class: rviz_default_plugins/PointCloud2
       Name: LiDAR
+      Enabled: true
       Topic:
-        Value: /sensing/lidar/concatenated/pointcloud
+        Value: /localization/util/downsample/pointcloud
         Depth: 5
-        Durability Policy: Volatile
         Reliability Policy: Best Effort
-      Color Transformer: AxisColor
-      Size (m): 0.04
+        Durability Policy: Volatile
       Style: Points
+      Size (Pixels): 3
+      Decay Time: 0.3
+      Color Transformer: AxisColor
+      Axis: Z
+    - Class: rviz_default_plugins/Odometry
+      Name: Ego
       Enabled: true
-    # --- Ego vehicle model ---
-    - Class: rviz_default_plugins/RobotModel
-      Name: VehicleModel
-      Description Topic:
-        Value: /robot_description
-        Durability Policy: Transient Local
+      Topic:
+        Value: /localization/kinematic_state
         Reliability Policy: Reliable
-      Enabled: true
-      Visual Enabled: true
-    # --- Planned trajectory ---
+      Shape: Arrow
+      Keep: 1
+      Covariance: {Value: false}
+      Color: 0; 200; 255
     - Class: rviz_default_plugins/MarkerArray
-      Name: Trajectory
-      Topic:
-        Value: /planning/scenario_planning/trajectory/debug/markers
-        Depth: 5
-        Durability Policy: Volatile
-        Reliability Policy: Reliable
+      Name: VectorMap
       Enabled: true
-    - Class: autoware_planning_rviz_plugin/Trajectory
-      Name: TrajectoryPath
-      Topic:
-        Value: /planning/scenario_planning/trajectory
-        Depth: 5
-        Durability Policy: Volatile
-        Reliability Policy: Reliable
-      View Path:
-        Enabled: true
-        Width: 2.0
-        Color: "; 0 200 255"
-        Alpha: 0.7
-      View Velocity:
-        Enabled: false
-      Enabled: true
-    # --- Route goal ---
-    - Class: rviz_default_plugins/MarkerArray
-      Name: Route
-      Topic:
-        Value: /planning/mission_planning/route_marker
-        Depth: 5
-        Durability Policy: Transient Local
-        Reliability Policy: Reliable
-      Enabled: true
-  Global Options:
-    Background Color: "; 20 22 28"
-    Fixed Frame: map
-    Frame Rate: 20
-  Tools:
-    - Class: rviz_default_plugins/MoveCamera
-    - Class: rviz_default_plugins/Select
-    - Class: rviz_default_plugins/FocusCamera
-    - Class: rviz_default_plugins/Measure
+      Topic: {Value: /map/vector_map_marker, Durability Policy: Transient Local, Reliability Policy: Reliable}
   Views:
     Current:
       Class: rviz_default_plugins/ThirdPersonFollower
-      Name: ChaseCam
+      Name: FollowEgo
       Target Frame: base_link
-      Distance: 45
-      Pitch: 0.9
-      Near Clip Distance: 0.05
-    Saved:
-      - Class: rviz_default_plugins/TopDownOrtho
-        Name: TopDown
-        Target Frame: base_link
-        Scale: 8
-Window Geometry:
-  Height: 900
-  Width: 1500
-  Hide Left Dock: false
-  Hide Right Dock: true
+      Distance: 40
+      Pitch: 0.6
+      Near Clip Distance: 0.5
