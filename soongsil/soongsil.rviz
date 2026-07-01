@@ -47,6 +47,15 @@ Visualization Manager:
       Decay Time: 1.0
       Color Transformer: AxisColor
       Axis: Z
+    - Class: rviz_default_plugins/RobotModel
+      Name: Vehicle
+      Enabled: true
+      Description Topic:
+        Value: /robot_description
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Visual Enabled: true
+      Collision Enabled: false
     - Class: rviz_default_plugins/Odometry
       Name: Ego
       Enabled: true
@@ -66,6 +75,7 @@ Visualization Manager:
       Class: rviz_default_plugins/ThirdPersonFollower
       Name: FollowEgo
       Target Frame: base_link
-      Distance: 40
-      Pitch: 0.6
+      Distance: 22
+      Pitch: 0.35
+      Yaw: 3.14
       Near Clip Distance: 0.5

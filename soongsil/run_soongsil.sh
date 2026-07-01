@@ -7,6 +7,10 @@ DKD(){ echo 1 | sudo -S docker exec -d autoware bash -c "$1" 2>/dev/null; }
 echo 1 | sudo -S docker stop autoware >/dev/null 2>&1   # nuke stuck bags/procs
 echo 1 | sudo -S docker start autoware >/dev/null 2>&1; sleep 5
 echo 1 | sudo -S docker cp "$(dirname "$0")/soongsil.rviz" autoware:/root/soongsil.rviz >/dev/null 2>&1
+# The bag's /robot_description URDF references package://carla_vehicle_description/mesh/carla_t2_ftm.dae
+# (Soongsil recorded with CARLA's vehicle pkg, absent here) -> car wouldn't render. Alias it to the
+# bundled lexus mesh + register in the ament index so RViz RobotModel shows a car at base_link.
+DK 'D=/opt/autoware/share/carla_vehicle_description; mkdir -p $D/mesh; cp -f /opt/autoware/share/sample_vehicle_description/mesh/lexus.dae $D/mesh/carla_t2_ftm.dae; touch /opt/autoware/share/ament_index/resource_index/packages/carla_vehicle_description'
 # NOTE: bag已 records its own /clock (Count 736). Do NOT pass --clock — the synthetic
 # clock would fight the recorded one -> /clock oscillates -> RViz "jump back in time" resets
 # every frame -> flicker + TF flies away. The recorded /clock drives use_sim_time nodes.
