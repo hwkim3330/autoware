@@ -300,6 +300,12 @@ class Bridge(Node):
         # ROii 4-LiDAR experimental layer
         self.create_subscription(_Str, "/roii/lidar_health",
                                  lambda m: self._set("roii_health", m), 1)
+        # Fault detector: 센서·모듈 장애 감지 결과
+        self.create_subscription(_Str, "/roii/fault_report",
+                                 lambda m: self._set("fault_report", m), 1)
+        # Reconfig manager: 주행 모드·재구성 상태 (태블릿 시각화 핵심)
+        self.create_subscription(_Str, "/roii/reconfig_status",
+                                 lambda m: self._set("reconfig_status", m), 1)
         self.pub_roii_fault = self.create_publisher(_Str, "/roii/fault_injector/command", 10)
         self.pub_gnss_fault = self.create_publisher(_Str, "/roii/gnss_fault/command", 10)
         self._gnss_fault = "normal"   # last GNSS fault mode we injected (for status/UI)
@@ -1287,6 +1293,11 @@ class Bridge(Node):
                         "plannedKmh": planned_kmh},
             "roii": (json.loads(s["roii_health"][0].data)
                      if "roii_health" in s and fresh("roii_health", 3) else None),
+            # 재구성 관리자: 주행 모드·센서 장애 상태·이벤트 이력
+            "reconfig": (json.loads(s["reconfig_status"][0].data)
+                         if "reconfig_status" in s and fresh("reconfig_status", 3) else None),
+            "faultReport": (json.loads(s["fault_report"][0].data)
+                            if "fault_report" in s and fresh("fault_report", 3) else None),
             "objects": objects,
             "trafficLights": traffic_lights,
             "upcomingLight": upcoming_tl,
