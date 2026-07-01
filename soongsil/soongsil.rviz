@@ -18,6 +18,22 @@ Visualization Manager:
       Enabled: true
       Show Names: false
       Marker Scale: 3
+      Frame Timeout: 15
+      Update Interval: 0
+    - Class: rviz_default_plugins/PointCloud2
+      Name: PointCloudMap
+      Enabled: true
+      Topic:
+        Value: /map/pointcloud_map
+        Depth: 1
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Style: Points
+      Size (Pixels): 2
+      Decay Time: 0
+      Color Transformer: FlatColor
+      Color: 90; 100; 120
+      Use Fixed Frame: true
     - Class: rviz_default_plugins/PointCloud2
       Name: LiDAR
       Enabled: true
@@ -28,7 +44,7 @@ Visualization Manager:
         Durability Policy: Volatile
       Style: Points
       Size (Pixels): 3
-      Decay Time: 0.3
+      Decay Time: 1.0
       Color Transformer: AxisColor
       Axis: Z
     - Class: rviz_default_plugins/Odometry
