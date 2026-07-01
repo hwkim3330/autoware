@@ -266,6 +266,16 @@ class Bridge(Node):
                                  lambda m: self._set("odom_lidar", m), be2)
         self.create_subscription(Odometry, "/localization/pose_twist_fusion_filter/gnss/kinematic_state",
                                  lambda m: self._set("odom_gnss", m), be2)
+        # Live raw GNSS pose (gnss_poser, map frame) — the live-and-bag common GNSS
+        # source (the dual gnss/lidar sub-EKF topics only exist in the Soongsil bag).
+        from geometry_msgs.msg import PoseWithCovarianceStamped as _PCS
+        self.create_subscription(_PCS, "/sensing/gnss/pose_with_covariance",
+                                 lambda m: self._set("gnss_raw", m), be2)
+        # GNSS fault injector output (possibly drifted/dropped/jumped). When the
+        # injector runs, the multimode gap prefers it so a GNSS fault visibly grows
+        # the gap; drop -> stale -> GNSS shown LOST.
+        self.create_subscription(_PCS, "/roii/gnss/pose_with_covariance",
+                                 lambda m: self._set("odom_gnss_inj", m), be2)
         self.create_subscription(OperationModeState, "/api/operation_mode/state",
                                  lambda m: self._set("op", m), tl)
         self.create_subscription(RouteState, "/api/routing/state",
@@ -291,6 +301,8 @@ class Bridge(Node):
         self.create_subscription(_Str, "/roii/lidar_health",
                                  lambda m: self._set("roii_health", m), 1)
         self.pub_roii_fault = self.create_publisher(_Str, "/roii/fault_injector/command", 10)
+        self.pub_gnss_fault = self.create_publisher(_Str, "/roii/gnss_fault/command", 10)
+        self._gnss_fault = "normal"   # last GNSS fault mode we injected (for status/UI)
         # full route to the goal (lanelet sequence) for the tablet — the whole
         # path to the destination, not just the local trajectory.
         try:
@@ -699,6 +711,15 @@ class Bridge(Node):
                 from std_msgs.msg import String as _Str
                 self.pub_roii_fault.publish(_Str(data=cmd[1]))
                 self._res(f"roii fault cmd: {cmd[1][:60]}")
+            elif isinstance(cmd, tuple) and cmd[0] == "gnss_fault":
+                from std_msgs.msg import String as _Str
+                import json as _json
+                try:
+                    self._gnss_fault = _json.loads(cmd[1]).get("mode", "normal")
+                except Exception:
+                    self._gnss_fault = "normal"
+                self.pub_gnss_fault.publish(_Str(data=cmd[1]))
+                self._res(f"GNSS fault -> {self._gnss_fault}")
             elif cmd == "trigger_emergency":
                 # Controlled emergency stop: switch the operation mode to STOP
                 # (the ADAPI-blessed hard stop). Latch _emergency so the frame
@@ -710,6 +731,9 @@ class Bridge(Node):
                 from std_msgs.msg import String as _Str, Bool as _Bool
                 self.pub_inject.publish(_Str(data="clear"))
                 self.pub_niro_fault.publish(_Bool(data=False))   # Niro bridge clear
+                import json as _json
+                self.pub_gnss_fault.publish(_Str(data=_json.dumps({"mode": "normal"})))
+                self._gnss_fault = "normal"
                 self._emergency = False
                 self._res("fault cleared -> auto mode selection")
             elif isinstance(cmd, tuple) and cmd[0] == "vehicle":
@@ -1227,9 +1251,21 @@ class Bridge(Node):
                 p = s[k][0].pose.pose.position
                 return {"x": round(p.x, 2), "y": round(p.y, 2)}
             return None
-        el = _pos("odom_lidar"); eg = _pos("odom_gnss")
+        # LiDAR/"truth" position: dual lidar sub-EKF if present (Soongsil bag),
+        # else the main fused pose (live ROii = NDT-driven).
+        el = _pos("odom_lidar") or _pos("odom")
+        gfault = getattr(self, "_gnss_fault", "normal")
+        inj = _pos("odom_gnss_inj")
+        if gfault != "normal":
+            # a GNSS fault is active -> trust ONLY the injector output. 'drop' makes
+            # it stale -> eg=None -> GNSS lost; drift/jump/noise -> gap grows.
+            eg = inj
+            sensors["gnss"] = "LOST" if eg is None else "FAULT"
+        else:
+            # normal: injector passthrough, else dual-EKF gnss (bag), else raw gnss (live)
+            eg = inj or _pos("odom_gnss") or _pos("gnss_raw")
         gap = round(math.hypot(el["x"] - eg["x"], el["y"] - eg["y"]), 2) if (el and eg) else None
-        multimode = {"lidar": el, "gnss": eg, "gapM": gap,
+        multimode = {"lidar": el, "gnss": eg, "gapM": gap, "gnssFault": gfault,
                      "active": "LIDAR_GNSS" if (el and eg) else ("LIDAR" if el else ("GNSS" if eg else "NONE"))}
         return {
             "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
