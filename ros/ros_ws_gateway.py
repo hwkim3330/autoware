@@ -1355,6 +1355,11 @@ async def handler(ws):
                     payload = {k: v for k, v in data.items() if k != "cmd"}
                     BRIDGE.enqueue(("roii_fault", _json.dumps(payload)))
                     print(f"[cmd] roii fault {payload}")
+                elif cmd == "gnss_fault":
+                    import json as _json
+                    payload = {k: v for k, v in data.items() if k != "cmd"}
+                    BRIDGE.enqueue(("gnss_fault", _json.dumps(payload)))
+                    print(f"[cmd] gnss fault {payload}")
                 elif cmd == "trigger_emergency":
                     BRIDGE.enqueue("trigger_emergency")
                 elif cmd == "vehicle":
