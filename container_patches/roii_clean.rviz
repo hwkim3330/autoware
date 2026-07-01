@@ -86,6 +86,42 @@ Visualization Manager:
       View Velocity:
         Enabled: false
       Enabled: true
+    # --- GNSS raw pose (orange arrow) — from /sensing/gnss/pose_with_covariance
+    #     Shows true GNSS position; compare with LiDAR ego (VehicleModel).
+    #     When GNSS fault is injected, the injector output (red) drifts away.
+    - Class: rviz_default_plugins/PoseWithCovariance
+      Name: GNSS_Raw
+      Topic:
+        Value: /sensing/gnss/pose_with_covariance
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color: "; 255 165 0"
+      Covariance:
+        Enabled: false
+      Shape:
+        Shaft Length: 2.0
+        Head Length: 1.0
+        Head Radius: 0.5
+      Enabled: true
+    # --- GNSS injector output (red arrow) — /roii/gnss/pose_with_covariance
+    #     Normal: same as raw. Fault injected: drifts/jumps/noisy vs raw.
+    #     Visual gap between orange and red = LiDAR<->GNSS localization gap.
+    - Class: rviz_default_plugins/PoseWithCovariance
+      Name: GNSS_Injected
+      Topic:
+        Value: /roii/gnss/pose_with_covariance
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color: "; 255 50 50"
+      Covariance:
+        Enabled: false
+      Shape:
+        Shaft Length: 2.5
+        Head Length: 1.2
+        Head Radius: 0.6
+      Enabled: true
     # --- Route goal ---
     - Class: rviz_default_plugins/MarkerArray
       Name: Route
