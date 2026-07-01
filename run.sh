@@ -14,10 +14,12 @@
 #   ./run.sh mapdaemon       # 태블릿 맵-전환 데몬 (탭으로 맵 바꾸려면 상시 실행)
 #   ./run.sh real            # 실제 지도 (CARLA 없이, planning simulator)
 #   ./run.sh test            # 전 타운 자율주행 검증 (~40분)
-#   ./run.sh roii low|mid|high [Town]   # ROii 4라이다 실험 모드
+#   ./run.sh roii low|mid|high [Town]   # ROii 4라이다 실험 모드 (장애감지·재구성)
+#   ./run.sh soongsil                   # 숭실대 rosbag 이중측위 데모
 #   ./run.sh multimode [Town]           # 숭실대 멀티모드
 #   ./run.sh niro [Town]                # Niro 실차 구성(단일 Ouster OS2-128 + 이중측위) 주행
 #   ./run.sh niro-fault / niro-clear    # 라이다 결함 주입/해제 (GNSS 폴백 시연)
+#   ./run.sh app [monitor|task|command] # 태블릿 앱 빌드+설치
 # ============================================================================
 set -u
 REPO="$(cd "$(dirname "$0")" && pwd)"
@@ -52,13 +54,25 @@ case "$CMD" in
     command -v adb >/dev/null && adb reverse tcp:8765 tcp:8765 >/dev/null 2>&1
     for i in $(seq 1 30); do SUDO docker exec autoware bash -lc "ss -tlnp 2>/dev/null | grep -q 8765" && { echo "gateway up (ws://<host>:8765/ws)"; break; }; sleep 2; done
     ;;
+  soongsil) exec bash "$REPO/soongsil/run_soongsil.sh" ;;
   app)
-    # ROii Command = primary tablet app (Tesla dashboard + 8-town map selector)
-    cd /home/kim/roii_command
+    # 태블릿 앱 빌드+설치+실행
+    APP="${2:-monitor}"
+    case "$APP" in
+      monitor)
+        PKG=com.keti.roii.monitor; DIR=/home/kim/roii_monitor ;;
+      task)
+        PKG=com.keti.roii.task; DIR=/home/kim/roii_task ;;
+      command)
+        PKG=com.keti.roii.command; DIR=/home/kim/roii_command ;;
+      *) echo "앱 이름: monitor | task | command"; exit 1 ;;
+    esac
     export PATH="$PATH:/home/kim/flutter/bin"
-    flutter build apk --release && adb install -r build/app/outputs/flutter-apk/app-release.apk
-    adb reverse tcp:8765 tcp:8765 && adb shell monkey -p com.keti.roii.command 1 >/dev/null 2>&1
-    echo "ROii Command 설치+USB 연결+실행 완료"
+    cd "$DIR" && flutter build apk --release \
+      && adb install -r build/app/outputs/flutter-apk/app-release.apk \
+      && adb reverse tcp:8765 tcp:8765 \
+      && adb shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
+    echo "$PKG 설치+실행 완료"
     ;;
   killall)  exec bash "$REPO/scripts/killall_sims.sh" ;;
   kill)
