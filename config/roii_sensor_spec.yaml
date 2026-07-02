@@ -37,7 +37,7 @@ lidars:
     horizontal_fov_deg: 360
     vertical_fov_deg: [-25, 15]
     frame: roii_left_pandar
-    mount: {x: 1.60, y: -1.05, z: 1.35, yaw_deg: -45}
+    mount: {x: 1.60, y: -1.05, z: 1.90, yaw_deg: -45}
   right_pandar:
     model: Hesai Pandar40P (approx.)
     channels: 40
@@ -45,7 +45,7 @@ lidars:
     horizontal_fov_deg: 360
     vertical_fov_deg: [-25, 15]
     frame: roii_right_pandar
-    mount: {x: 1.60, y: 1.05, z: 1.35, yaw_deg: 45}
+    mount: {x: 1.60, y: 1.05, z: 1.90, yaw_deg: 45}
 
 profiles:                  # CARLA points_per_second / range per profile
   low:   {g32_pps: 100000, g32_range: 135, pandar_pps: 140000, pandar_range: 110,
