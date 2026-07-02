@@ -115,7 +115,10 @@ sensor_kit_base_link:
   roii_left_pandar_base_link:
     x: 1.600
     y: -1.050
-    z: 1.350
+    z: 1.900  # raised from 1.350 -- was inside the cabin silhouette (roof
+              # at 2.660), self-occluding rays toward the vehicle's own
+              # rear/inboard side. 1.900 clears the body bulk like a real
+              # side-mirror/greenhouse mount would.
     roll: 0.000
     pitch: 0.000
     yaw: -0.785398  # -45 deg: front-left corner, facing forward-left
@@ -123,7 +126,7 @@ sensor_kit_base_link:
   roii_right_pandar_base_link:
     x: 1.600
     y: 1.050
-    z: 1.350
+    z: 1.900
     roll: 0.000
     pitch: 0.000
     yaw: 0.785398  # +45 deg: front-right corner, facing forward-right
