@@ -408,6 +408,11 @@ class Bridge(Node):
         self.cli_route = self.create_client(SetRoutePoints, "/api/routing/set_route_points", callback_group=cbg)
         self.cli_auto = self.create_client(ChangeOperationMode, "/api/operation_mode/change_to_autonomous", callback_group=cbg)
         self.cli_stop = self.create_client(ChangeOperationMode, "/api/operation_mode/change_to_stop", callback_group=cbg)
+        # NDT/EKF 강제 재초기화용 (respawn 안정화): 끄고 -> initialpose -> 다시 켜면
+        # 이전 세션의 잔여 내부 상태(속도/공분산 이력)를 안고 가지 않고 완전히 새로 정렬한다.
+        from std_srvs.srv import SetBool
+        self.cli_trig_ndt = self.create_client(SetBool, "/localization/pose_estimator/trigger_node", callback_group=cbg)
+        self.cli_trig_ekf = self.create_client(SetBool, "/localization/pose_twist_fusion_filter/trigger_node", callback_group=cbg)
         self._emergency = False   # set by trigger_emergency, cleared by heal/drive
         self._cmd_clock = Clock(clock_type=ClockType.SYSTEM_TIME)
         self.create_timer(0.5, self._process_cmds, callback_group=cbg)
@@ -1002,19 +1007,47 @@ class Bridge(Node):
                 self._res(f"respawn OK ({label}) -- on lane, ready to DRIVE"); return
         self._res("respawn: localization did not converge (try DRIVE or relaunch)")
 
+    def _trigger(self, client, on, timeout=3.0):
+        """NDT/EKF trigger_node(SetBool) 호출. 서비스가 없거나 응답이 늦어도
+        respawn 흐름 자체는 막지 않도록 예외를 삼킨다."""
+        try:
+            from std_srvs.srv import SetBool
+            if not client.wait_for_service(timeout_sec=timeout):
+                return False
+            req = SetBool.Request(); req.data = on
+            fut = client.call_async(req)
+            end = time.monotonic() + timeout
+            while not fut.done() and time.monotonic() < end:
+                time.sleep(0.05)
+            return fut.done()
+        except Exception:
+            return False
+
     def _teleport_to(self, x, y, z, roll, pitch, yaw):
         """Recover to a CARLA pose by publishing /initialpose. The CARLA
         interface OWNS the ego and ticks the sim, so its initialpose_callback
         does the actual set_transform (a secondary client's set_transform is
         swallowed in sync mode -- that's what made earlier respawns diverge).
         This is exactly how the bring-up seeds localization, so NDT converges.
-        Returns True iff NDT settles within 5 m. (x,y,z,...) are CARLA coords."""
+
+        Mid-session respawns are less reliable than the boot-time seed because
+        NDT/EKF carry residual internal state (velocity, covariance history)
+        from wherever the car just was. Trigger_node(false) -> initialpose ->
+        trigger_node(true) forces a full fresh re-align instead of blending
+        the new pose with stale state -- same mechanism as RViz's "Initialize
+        with GNSS" button. Returns True iff NDT settles within 5 m.
+        (x,y,z,...) are CARLA coords."""
         ax, ay = x, -y                 # CARLA -> Autoware (map frame) y-flip
         awyaw = math.radians(-yaw)     # yaw-flip
         from geometry_msgs.msg import PoseWithCovarianceStamped
         if not hasattr(self, "pub_init"):
             self.pub_init = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 1)
             time.sleep(0.5)
+
+        self._trigger(self.cli_trig_ndt, False)
+        self._trigger(self.cli_trig_ekf, False)
+        time.sleep(0.5)
+
         for _ in range(3):
             m = PoseWithCovarianceStamped()
             m.header.frame_id = "map"
@@ -1023,11 +1056,18 @@ class Bridge(Node):
             m.pose.pose.position.y = ay
             m.pose.pose.orientation.z = math.sin(awyaw / 2)
             m.pose.pose.orientation.w = math.cos(awyaw / 2)
-            m.pose.covariance[0] = m.pose.covariance[7] = 0.25
-            m.pose.covariance[35] = 0.068
+            # 재초기화 직후라 이전 상태와 어긋날 수 있으므로 초기 탐색 반경을
+            # 조금 넉넉하게 (0.5m/15도 -> 1.5m/25도 표준편차) 잡아 NDT가 로컬
+            # 미니멈에 걸리지 않고 실제 위치로 수렴하게 한다.
+            m.pose.covariance[0] = m.pose.covariance[7] = 2.25
+            m.pose.covariance[35] = 0.19
             self.pub_init.publish(m)
-            time.sleep(1.5)
-        for _ in range(10):
+            time.sleep(1.0)
+
+        self._trigger(self.cli_trig_ndt, True)
+        self._trigger(self.cli_trig_ekf, True)
+
+        for _ in range(15):
             time.sleep(1.0)
             with self.lock:
                 od = self.s.get("odom")
