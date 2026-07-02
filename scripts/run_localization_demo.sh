@@ -202,12 +202,13 @@ for f in ros_ws_gateway.py perception_stub.py roii_watchdog.py multimode_supervi
   [ -f "$REPO/ros/$f" ] && SUDO docker cp "$REPO/ros/$f" autoware:/root/$f >/dev/null 2>&1
 done
 SUDO docker cp "$REPO/container_patches/roii_clean.rviz" autoware:/root/roii_clean.rviz >/dev/null 2>&1
-# rviz vehicle: DEFAULT = KETI-badged lexus; the ROii shuttle mesh is staged
-# for the tablet's vehicle-switch command ({cmd:vehicle, model:roii}).
-SUDO docker cp "$REPO/container_patches/lexus_stock.dae" \
-  autoware:/opt/autoware/share/sample_vehicle_description/mesh/lexus.dae >/dev/null 2>&1
+# rviz vehicle: DEFAULT = real ROii shuttle mesh (matches actual LiDAR/sensor
+# geometry). The KETI-badged lexus is kept as .bak for the tablet's
+# vehicle-switch command ({cmd:vehicle, model:lexus}) to fall back to.
 SUDO docker cp "$REPO/container_patches/lexus_stock.dae" \
   autoware:/opt/autoware/share/sample_vehicle_description/mesh/lexus.dae.bak >/dev/null 2>&1
+SUDO docker cp "$REPO/container_patches/roii_vehicle.dae" \
+  autoware:/opt/autoware/share/sample_vehicle_description/mesh/lexus.dae >/dev/null 2>&1
 SUDO docker cp "$REPO/container_patches/roii_vehicle.dae" \
   autoware:/opt/autoware/share/sample_vehicle_description/mesh/roii_vehicle.dae.src >/dev/null 2>&1
 SUDO docker cp "$REPO/container_patches/roii_tex.png" \
