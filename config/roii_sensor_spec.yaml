@@ -26,6 +26,10 @@ lidars:
     vertical_fov_deg: [-5, 5]
     frame: roii_rear_g32
     mount: {x: -2.15, y: 0.0, z: 1.10, yaw_deg: 180}
+  # Real ROii (autoa2z.co.kr/ROII): mounted at the SIDE MIRROR ("차량의 모서리"),
+  # explicitly to sense "측면과 정면 모두" (both side AND front) -> diagonal
+  # front-outward corner mount (45 deg), not pure side (90 deg). y sign fixed
+  # (was swapped vs the true vehicle side, verified via CARLA get_right_vector).
   left_pandar:              # Hesai Pandar/Pandar40P-class, 360 deg
     model: Hesai Pandar40P (approx.)
     channels: 40
@@ -33,7 +37,7 @@ lidars:
     horizontal_fov_deg: 360
     vertical_fov_deg: [-25, 15]
     frame: roii_left_pandar
-    mount: {x: 1.60, y: 1.05, z: 1.35, yaw_deg: 90}
+    mount: {x: 1.60, y: -1.05, z: 1.35, yaw_deg: -45}
   right_pandar:
     model: Hesai Pandar40P (approx.)
     channels: 40
@@ -41,7 +45,7 @@ lidars:
     horizontal_fov_deg: 360
     vertical_fov_deg: [-25, 15]
     frame: roii_right_pandar
-    mount: {x: 1.60, y: -1.05, z: 1.35, yaw_deg: -90}
+    mount: {x: 1.60, y: 1.05, z: 1.35, yaw_deg: 45}
 
 profiles:                  # CARLA points_per_second / range per profile
   low:   {g32_pps: 100000, g32_range: 135, pandar_pps: 140000, pandar_range: 110,

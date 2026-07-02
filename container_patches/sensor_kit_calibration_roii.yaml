@@ -104,13 +104,21 @@ sensor_kit_base_link:
   # get_right_vector()/get_forward_vector() on the live actor. Positive y in
   # this frame IS the vehicle's right side (matches the header convention and
   # the 6-camera block above), so "left_pandar" must carry NEGATIVE y.
+  #
+  # Yaw (fixed): official ROii spec (autoa2z.co.kr/ROII) mounts these at the
+  # SIDE MIRROR ("차량의 모서리"/vehicle corner), explicitly "측면과 정면 모두를
+  # 빈틈없이 감지" (seamlessly senses BOTH side AND front) -> a diagonal
+  # front-outward corner mount, not a pure 90 deg side mount. 45 deg (halfway
+  # between front=0 and side=90) matches that intent. 360-deg Pandar coverage
+  # itself is unaffected (yaw only sets the reference azimuth), but this keeps
+  # the model faithful to the real vehicle and any FOV-limited use correct.
   roii_left_pandar_base_link:
     x: 1.600
     y: -1.050
     z: 1.350
     roll: 0.000
     pitch: 0.000
-    yaw: -1.570796
+    yaw: -0.785398  # -45 deg: front-left corner, facing forward-left
 
   roii_right_pandar_base_link:
     x: 1.600
@@ -118,5 +126,5 @@ sensor_kit_base_link:
     z: 1.350
     roll: 0.000
     pitch: 0.000
-    yaw: 1.570796
+    yaw: 0.785398  # +45 deg: front-right corner, facing forward-right
 
