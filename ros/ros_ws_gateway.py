@@ -36,10 +36,10 @@ from geometry_msgs.msg import Pose
 from autoware_perception_msgs.msg import PredictedObjects  # noqa (ensures msgs available)
 from autoware_planning_msgs.msg import Trajectory
 from autoware_adapi_v1_msgs.msg import (
-    OperationModeState, RouteState, LocalizationInitializationState,
+    OperationModeState, RouteState, LocalizationInitializationState, MotionState,
 )
 from autoware_adapi_v1_msgs.srv import (
-    SetRoutePoints, ClearRoute, ChangeOperationMode,
+    SetRoutePoints, ClearRoute, ChangeOperationMode, AcceptStart,
 )
 from autoware_control_msgs.msg import Control
 from autoware_vehicle_msgs.msg import GearCommand
@@ -278,6 +278,8 @@ class Bridge(Node):
                                  lambda m: self._set("odom_gnss_inj", m), be2)
         self.create_subscription(OperationModeState, "/api/operation_mode/state",
                                  lambda m: self._set("op", m), tl)
+        self.create_subscription(MotionState, "/api/motion/state",
+                                 lambda m: self._set("motion", m), tl)
         self.create_subscription(RouteState, "/api/routing/state",
                                  lambda m: self._set("route", m), tl)
         self.create_subscription(LocalizationInitializationState,
@@ -408,6 +410,7 @@ class Bridge(Node):
         self.cli_route = self.create_client(SetRoutePoints, "/api/routing/set_route_points", callback_group=cbg)
         self.cli_auto = self.create_client(ChangeOperationMode, "/api/operation_mode/change_to_autonomous", callback_group=cbg)
         self.cli_stop = self.create_client(ChangeOperationMode, "/api/operation_mode/change_to_stop", callback_group=cbg)
+        self.cli_accept_start = self.create_client(AcceptStart, "/api/motion/accept_start", callback_group=cbg)
         # NDT/EKF 강제 재초기화용 (respawn 안정화): 끄고 -> initialpose -> 다시 켜면
         # 이전 세션의 잔여 내부 상태(속도/공분산 이력)를 안고 가지 않고 완전히 새로 정렬한다.
         from std_srvs.srv import SetBool
@@ -867,6 +870,27 @@ class Bridge(Node):
             time.sleep(0.5)
         self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
 
+    def _accept_start_when_ready(self, timeout=8.0):
+        """After AUTONOMOUS mode is accepted, Autoware still gates the actual
+        motion output behind a separate confirmation: /api/motion/state must
+        reach STARTING (2) before /api/motion/accept_start will succeed (it
+        replies ERROR_NOT_STARTING otherwise). Without this call the vehicle
+        sits at v=0 forever even though the mode reads AUTONOMOUS. Poll for
+        STARTING and confirm it; if the planner skips straight to MOVING (3)
+        -- e.g. re-engage with a route already rolling -- there is nothing to
+        confirm, so just return."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            with self.lock:
+                mo = self.s.get("motion")
+            state = mo[0].state if mo else None
+            if state == MotionState.MOVING:
+                return
+            if state == MotionState.STARTING:
+                self._call(self.cli_accept_start, AcceptStart.Request(), timeout=3.0)
+                return
+            time.sleep(0.3)
+
     def _engage(self, gx, gy):
         tag = f" ({gx:.0f},{gy:.0f})" if gx is not None else ""
         self._res(f"route set{tag}; engaging")
@@ -882,6 +906,7 @@ class Bridge(Node):
             if avail:
                 ra = self._call(self.cli_auto, ChangeOperationMode.Request())
                 if ra and ra.status.success:
+                    self._accept_start_when_ready()
                     self._res("AUTONOMOUS"); return
             if i % 3 == 0:
                 self._res(f"engaging... ({i + 1}/20){' (waiting for trajectory)' if not avail else ''}")
