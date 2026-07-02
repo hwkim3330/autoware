@@ -304,6 +304,7 @@ class Bridge(Node):
         self.create_subscription(_Str, "/roii/fault_injector/status",
                                  lambda m: self._set("inj_status", m), 1)
         self._reconfig_mode = "NORMAL"
+        self._reconfig_settled = False  # 부팅 직후 topic 미도착 구간의 오탐 이력 방지
         self._reconfig_history = []
         import collections as _col
         self._reconfig_hist_deq = _col.deque(maxlen=20)
@@ -1155,6 +1156,14 @@ class Bridge(Node):
             new_mode = "DEGRADED_3"
         else:
             new_mode = "NORMAL"
+
+        # 부팅 직후(topic 미도착 구간)에는 STALE 오탐이 나기 쉬우므로, 측위가
+        # 최초로 한 번 정상 수렴(converged)한 뒤부터만 모드 전환/이력을 기록한다.
+        if not self._reconfig_settled:
+            if converged and ntraj > 0:
+                self._reconfig_settled = True
+            else:
+                new_mode = self._reconfig_mode  # 판정 보류, 이전 상태 유지
 
         # 모드 전환 감지
         if new_mode != self._reconfig_mode:
