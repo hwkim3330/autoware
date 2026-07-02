@@ -747,6 +747,9 @@ class Bridge(Node):
                 import json as _json
                 self.pub_gnss_fault.publish(_Str(data=_json.dumps({"mode": "normal"})))
                 self._gnss_fault = "normal"
+                # LiDAR injector: heal은 재구성 사다리 전체(4-LiDAR + GNSS)를
+                # 정상으로 되돌리는 단일 버튼이어야 하므로 여기서도 clear.
+                self.pub_roii_fault.publish(_Str(data=_json.dumps({"sensor": "all", "mode": "normal"})))
                 self._emergency = False
                 self._res("fault cleared -> auto mode selection")
             elif isinstance(cmd, tuple) and cmd[0] == "vehicle":
@@ -1099,8 +1102,11 @@ class Bridge(Node):
                  "GNSS_FALLBACK":4,"MODULE_FAULT":5,"MRM":6}
     _LIDARS_RCG = ("front_g32","rear_g32","left_pandar","right_pandar")
 
-    def _calc_reconfig(self, s):
-        """injector_status + gnss_fault로 재구성 상태 계산 (별도 노드 없이)."""
+    def _calc_reconfig(self, s, *, ndt_hz=0.0, converged=False, ntraj=0,
+                        rstate=0, op_avail=False):
+        """injector_status + gnss_fault + 이미 계산된 localization/planning/control
+        지표(ndt_hz, converged, ntraj, rstate, op_avail — frame()에서 넘겨받음)로
+        재구성 상태 계산. 별도 노드/구독 없이 gateway 내부에서만 판단 (DDS 안전)."""
         import datetime as _dt, json as _json
         try:
             inj = _json.loads(s["inj_status"][0].data) if "inj_status" in s else {}
@@ -1120,16 +1126,26 @@ class Bridge(Node):
             "hz": 0.0, "cov": 0.0}
         sensor_summary["imu"]  = {"status": "OK", "hz": 0.0}
 
-        # 모듈: lidar_ok(NDT) + planning 상태로 판단
-        loc_ok = lidar_ok if 'lidar_ok' in dir() else True
+        # 모듈 상태: 이미 frame()이 매 틱 계산하는 지표를 그대로 판정에 사용
+        #  - localization: kinematic_state(odom)가 최근 2초 내 갱신됐는지 (converged)
+        #  - planning: route가 SET/ARRIVED인데도 trajectory가 안 나오면 fault
+        #    (route 미설정 상태에서 ntraj==0은 정상이므로 오탐 방지)
+        #  - control: AD API(operation_mode) 응답 여부를 채널 생존 신호로 사용
+        loc_fault  = not converged
+        plan_fault = rstate in (2, 4) and ntraj == 0
+        ctrl_fault = "op" not in s
         module_summary = {
-            "localization": {"status":"OK","hz":0.0},
-            "planning":     {"status":"OK","hz":0.0},
-            "control":      {"status":"OK","hz":0.0},
+            "localization": {"status": "OK" if not loc_fault  else "STALE", "hz": round(ndt_hz, 1)},
+            "planning":     {"status": "OK" if not plan_fault else "STALE", "hz": float(ntraj)},
+            "control":      {"status": "OK" if not ctrl_fault else "STALE", "hz": 0.0},
         }
 
-        # 주행 모드 결정
-        if active == 0:
+        # 주행 모드 결정 — 모듈 장애가 센서 재구성보다 우선순위 높음
+        if loc_fault and plan_fault:
+            new_mode = "MRM"
+        elif loc_fault or plan_fault or ctrl_fault:
+            new_mode = "MODULE_FAULT"
+        elif active == 0:
             new_mode = "GNSS_FALLBACK"
         elif active == 1:
             new_mode = "DEGRADED_1"
@@ -1375,7 +1391,8 @@ class Bridge(Node):
             "roii": (json.loads(s["roii_health"][0].data)
                      if "roii_health" in s and fresh("roii_health", 3) else None),
             # 재구성 관리자: gateway 내장 계산 (injector status 기반)
-            "reconfig": self._calc_reconfig(s),
+            "reconfig": self._calc_reconfig(s, ndt_hz=ndt_hz, converged=converged,
+                                            ntraj=ntraj, rstate=rstate, op_avail=op_avail),
             "faultReport": None,
             "objects": objects,
             "trafficLights": traffic_lights,
