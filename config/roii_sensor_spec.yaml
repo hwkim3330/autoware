@@ -13,7 +13,7 @@ lidars:
     model: AutoL G32 (approx.)
     channels: 32
     range_m: 300
-    horizontal_fov_deg: 135
+    horizontal_fov_deg: 170
     vertical_fov_deg: [-5, 5]
     frame: roii_front_g32
     # placeholder mount (base_link, x fwd / y left / z up)
@@ -22,7 +22,7 @@ lidars:
     model: AutoL G32 (approx.)
     channels: 32
     range_m: 300
-    horizontal_fov_deg: 135
+    horizontal_fov_deg: 170
     vertical_fov_deg: [-5, 5]
     frame: roii_rear_g32
     mount: {x: -2.15, y: 0.0, z: 1.10, yaw_deg: 180}

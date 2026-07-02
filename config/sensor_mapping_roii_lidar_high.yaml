@@ -21,7 +21,7 @@ sensor_mappings:
       lower_fov: -5.0
       rotation_frequency: 10
       noise_stddev: 0.0
-      horizontal_fov: 135.0
+      horizontal_fov: 170.0
   roii_rear_g32_base_link:
     carla_type: sensor.lidar.ray_cast
     id: rear_g32
@@ -39,7 +39,7 @@ sensor_mappings:
       lower_fov: -5.0
       rotation_frequency: 10
       noise_stddev: 0.0
-      horizontal_fov: 135.0
+      horizontal_fov: 170.0
   roii_left_pandar_base_link:
     carla_type: sensor.lidar.ray_cast
     id: left_pandar
