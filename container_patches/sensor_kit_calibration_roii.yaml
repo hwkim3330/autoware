@@ -100,19 +100,23 @@ sensor_kit_base_link:
     pitch: 0.000
     yaw: 3.141593
 
+  # NOTE (fixed): left/right were swapped -- verified against CARLA's own
+  # get_right_vector()/get_forward_vector() on the live actor. Positive y in
+  # this frame IS the vehicle's right side (matches the header convention and
+  # the 6-camera block above), so "left_pandar" must carry NEGATIVE y.
   roii_left_pandar_base_link:
-    x: 1.600
-    y: 1.050
-    z: 1.350
-    roll: 0.000
-    pitch: 0.000
-    yaw: 1.570796
-
-  roii_right_pandar_base_link:
     x: 1.600
     y: -1.050
     z: 1.350
     roll: 0.000
     pitch: 0.000
     yaw: -1.570796
+
+  roii_right_pandar_base_link:
+    x: 1.600
+    y: 1.050
+    z: 1.350
+    roll: 0.000
+    pitch: 0.000
+    yaw: 1.570796
 
