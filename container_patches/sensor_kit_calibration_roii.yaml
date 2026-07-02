@@ -105,13 +105,16 @@ sensor_kit_base_link:
   # this frame IS the vehicle's right side (matches the header convention and
   # the 6-camera block above), so "left_pandar" must carry NEGATIVE y.
   #
-  # Yaw (fixed): official ROii spec (autoa2z.co.kr/ROII) mounts these at the
-  # SIDE MIRROR ("차량의 모서리"/vehicle corner), explicitly "측면과 정면 모두를
-  # 빈틈없이 감지" (seamlessly senses BOTH side AND front) -> a diagonal
-  # front-outward corner mount, not a pure 90 deg side mount. 45 deg (halfway
-  # between front=0 and side=90) matches that intent. 360-deg Pandar coverage
-  # itself is unaffected (yaw only sets the reference azimuth), but this keeps
-  # the model faithful to the real vehicle and any FOV-limited use correct.
+  # Yaw (fixed again): a "left_pandar" must actually face the vehicle's LEFT
+  # (and "right_pandar" the RIGHT) so the naming matches the physical facing
+  # -- pure 90 deg side mount, not a 45 deg forward-diagonal. Overlap with
+  # front_g32/rear_g32's own FOV is expected and fine (multiple sensors
+  # covering the same zone is the real ROii's redundancy design, not a bug).
+  # Note: yaw does not change which real-world directions get returns for a
+  # 360-deg FOV sensor (confirmed empirically -- same self-occlusion gap
+  # measured at both 45 and 90 deg), it only affects which local ray maps to
+  # which labeled azimuth -- so this is a naming/semantics fix, coverage-
+  # neutral by itself.
   roii_left_pandar_base_link:
     x: 1.600
     y: -1.050
@@ -121,7 +124,7 @@ sensor_kit_base_link:
               # side-mirror/greenhouse mount would.
     roll: 0.000
     pitch: 0.000
-    yaw: -0.785398  # -45 deg: front-left corner, facing forward-left
+    yaw: -1.570796  # -90 deg: pure LEFT side, facing left
 
   roii_right_pandar_base_link:
     x: 1.600
@@ -129,5 +132,5 @@ sensor_kit_base_link:
     z: 1.900
     roll: 0.000
     pitch: 0.000
-    yaw: 0.785398  # +45 deg: front-right corner, facing forward-right
+    yaw: 1.570796  # +90 deg: pure RIGHT side, facing right
 

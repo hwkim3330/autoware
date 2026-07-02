@@ -9,11 +9,16 @@ vehicle:
   max_speed_kmh: 40
 
 lidars:
+  # autoa2z.co.kr/ROII official spec: front/rear = 135 deg each, side = 180
+  # deg each. Side FOV widened further to 220 deg here (beyond spec) to give
+  # deliberate overlap with front/rear and close a measured self-occlusion
+  # gap near vehicle-RIGHT -- overlapping coverage between sensors is fine
+  # by design (ROii's own redundancy), only true blind spots are a problem.
   front_g32:               # AutoL G32-class, forward long-range
     model: AutoL G32 (approx.)
     channels: 32
     range_m: 300
-    horizontal_fov_deg: 170
+    horizontal_fov_deg: 135
     vertical_fov_deg: [-5, 5]
     frame: roii_front_g32
     # placeholder mount (base_link, x fwd / y left / z up)
@@ -22,30 +27,31 @@ lidars:
     model: AutoL G32 (approx.)
     channels: 32
     range_m: 300
-    horizontal_fov_deg: 170
+    horizontal_fov_deg: 135
     vertical_fov_deg: [-5, 5]
     frame: roii_rear_g32
     mount: {x: -2.15, y: 0.0, z: 1.10, yaw_deg: 180}
-  # Real ROii (autoa2z.co.kr/ROII): mounted at the SIDE MIRROR ("차량의 모서리"),
-  # explicitly to sense "측면과 정면 모두" (both side AND front) -> diagonal
-  # front-outward corner mount (45 deg), not pure side (90 deg). y sign fixed
-  # (was swapped vs the true vehicle side, verified via CARLA get_right_vector).
-  left_pandar:              # Hesai Pandar/Pandar40P-class, 360 deg
+  # Mounted at the SIDE MIRROR height/area, facing straight out to the side
+  # (yaw = pure left/right, matching the sensor's name -- a "left" sensor
+  # must actually face vehicle-left). z raised to 1.90 (from a 1.35
+  # placeholder) to clear the cabin body silhouette, which was
+  # self-occluding rays toward the vehicle's own rear/inboard side.
+  left_pandar:              # Hesai Pandar/Pandar40P-class
     model: Hesai Pandar40P (approx.)
     channels: 40
     range_m: 200
-    horizontal_fov_deg: 360
+    horizontal_fov_deg: 220
     vertical_fov_deg: [-25, 15]
     frame: roii_left_pandar
-    mount: {x: 1.60, y: -1.05, z: 1.90, yaw_deg: -45}
+    mount: {x: 1.60, y: -1.05, z: 1.90, yaw_deg: -90}
   right_pandar:
     model: Hesai Pandar40P (approx.)
     channels: 40
     range_m: 200
-    horizontal_fov_deg: 360
+    horizontal_fov_deg: 220
     vertical_fov_deg: [-25, 15]
     frame: roii_right_pandar
-    mount: {x: 1.60, y: 1.05, z: 1.90, yaw_deg: 45}
+    mount: {x: 1.60, y: 1.05, z: 1.90, yaw_deg: 90}
 
 profiles:                  # CARLA points_per_second / range per profile
   low:   {g32_pps: 100000, g32_range: 135, pandar_pps: 140000, pandar_range: 110,
