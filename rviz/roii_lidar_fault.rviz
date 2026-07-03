@@ -3858,7 +3858,23 @@ Visualization Manager:
   Value: true
   Views:
     Current:
-      Class: rviz_default_plugins/ThirdPersonFollower
+      Angle: 0
+      Class: rviz_default_plugins/TopDownOrtho
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.05999999865889549
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Invert Z Axis: false
+      Name: TopDown
+      Near Clip Distance: 0.009999999776482582
+      Scale: 10
+      Target Frame: base_link
+      Value: TopDownOrtho (rviz)
+      X: 0
+      Y: 0
+    Saved:
+    - Class: rviz_default_plugins/ThirdPersonFollower
       Distance: 18
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
@@ -3877,23 +3893,7 @@ Visualization Manager:
       Pitch: 0.20000000298023224
       Target Frame: base_link
       Value: ThirdPersonFollower (rviz)
-      Yaw: 3.141592025756836
-    Saved:
-    - Angle: 0
-      Class: rviz_default_plugins/TopDownOrtho
-      Enable Stereo Rendering:
-        Stereo Eye Separation: 0.05999999865889549
-        Stereo Focal Distance: 1
-        Swap Stereo Eyes: false
-        Value: false
-      Invert Z Axis: false
-      Name: TopDown
-      Near Clip Distance: 0.009999999776482582
-      Scale: 10
-      Target Frame: base_link
-      Value: TopDownOrtho (rviz)
-      X: 0
-      Y: 0
+      Yaw: 0
 Window Geometry:
   AutowareStatePanel:
     collapsed: false

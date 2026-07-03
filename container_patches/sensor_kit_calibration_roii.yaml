@@ -118,10 +118,14 @@ sensor_kit_base_link:
   roii_left_pandar_base_link:
     x: 1.600
     y: -1.050
-    z: 1.900  # raised from 1.350 -- was inside the cabin silhouette (roof
-              # at 2.660), self-occluding rays toward the vehicle's own
-              # rear/inboard side. 1.900 clears the body bulk like a real
-              # side-mirror/greenhouse mount would.
+    z: 2.600  # raised again from 1.900 -- measured real angular coverage was
+              # still only ~90-130deg out of the declared 220deg FOV (self-
+              # occlusion by the cabin body, confirmed live on the CARLA
+              # actor: horizontal_fov=220 is correctly applied, the shortfall
+              # is real occlusion not config). 1.900 was still well under the
+              # roofline (2.660); pushing to right at the roofline clears
+              # nearly the entire body silhouette, same reasoning as why real
+              # AV corner/side lidars sit at or above the greenhouse line.
     roll: 0.000
     pitch: 0.000
     yaw: -1.570796  # -90 deg: pure LEFT side, facing left
@@ -129,8 +133,13 @@ sensor_kit_base_link:
   roii_right_pandar_base_link:
     x: 1.600
     y: 1.050
-    z: 1.900
+    z: 2.600
     roll: 0.000
     pitch: 0.000
-    yaw: 1.570796  # +90 deg: pure RIGHT side, facing right
+    yaw: 1.570796  # +90 deg: pure RIGHT side, facing right. (Tested yaw=60
+                   # as a diagnostic: the gap's start followed to ~60 but its
+                   # end stayed fixed at ~115, widening the total gap from
+                   # 25deg to 55deg -- confirms a real, mostly yaw-independent
+                   # vehicle-relative dead zone near 90-115deg, so 90 is the
+                   # best yaw, not a fixable seam.)
 
