@@ -121,3 +121,5 @@ AWSIM은 `run.sh`에 연결되어 있지 않고 `scripts/run_awsim.sh`를 직접
 - `docs/niro_system.md` — Niro 실차 구성 (듀얼 측위, 실제 지도)
 - `docs/autoware_carla_integration.md` — CARLA 통합 전체 디버깅 히스토리
 - `docs/town_test_results.md` — 타운별 자율주행 검증 결과
+- `docs/versions.md` — 전체 버전 매트릭스 (드라이버/OS/ROS2/시뮬레이터/앱), 다른 머신에
+  재현할 때 필요한 버전 체크리스트
