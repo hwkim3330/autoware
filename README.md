@@ -7,6 +7,9 @@ KETI autonomous-driving stack on **one 16-core / RTX-3090 box**: the CARLA
 simulator drives a full **Autoware** (ROS 2 Humble, Docker) stack — NDT
 localization, lanelet2 routing, behavior/motion planning, MPC control — and a
 **Flutter tablet app** (Tesla-style dashboard) commands and monitors it live.
+This README covers the CARLA backend in detail; Autoware also runs against
+AWSIM, real-map data, and rosbag replay — see **`docs/architecture.md`** for
+the full picture and command reference across all backends.
 
 ```
 CARLA 0.9.16 (cores 0,8) ──lidar/imu/gnss──► Autoware (docker, cores 1-7,9-15)
