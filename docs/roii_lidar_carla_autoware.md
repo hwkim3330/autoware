@@ -62,6 +62,40 @@ CARLA `get_right_vector()`로 실측 검증됨)을 따른다. yaw는 센서 이�
 `fault` 명령으로 센서를 하나씩 꺼보면 좌/우가 각각 올바른 쪽(우측 센서 끄면
 전방-우측 소실, 좌측 센서 끄면 후방-좌측 소실)만 잃는 것으로 재확인 가능.
 
+### 자기폐색(self-occlusion) 근본 원인 -- CARLA 소스 레벨 확인 (2026-07-06)
+
+`sensor.lidar.ray_cast`의 실제 C++ 구현(`RayCastSemanticLidar.cpp`, `RayCastLidar.cpp`가
+상속)을 직접 확인함. 레이캐스트 트레이스가 **센서 자기 자신만 무시하고, 부착된
+부모 차량 액터는 무시하지 않는 것이 하드코딩**되어 있음:
+```cpp
+FCollisionQueryParams TraceParams = FCollisionQueryParams(FName(TEXT("Laser_Trace")), true, this);
+// `this`(센서 자신)만 InIgnoreActor로 넘어감 -- 부모 차량은 절대 무시 안 됨
+```
+블루프린트 속성(`horizontal_fov`, `range` 등)이나 파이썬 API 어디에도 이걸 끄는
+옵션이 없음 -- 코드에 박혀있어서 **바이너리 배포판으로는 절대 못 고침**.
+
+같은 문제(2019, 이슈 #1797/#1498)를 다른 사용자들도 겪었고 한 번도 고쳐진 적
+없음 -- 유일한 해결책이 "센서를 더 높이 올려라"(우리가 이미 한 것). 단, 그 이슈들은
+전부 **지붕 마운트**(hood/roof 케이스)였고, 우리처럼 **코너 마운트**로 인한
+자기폐색은 CARLA 커뮤니티에 보고된 적 없는 변형.
+
+**진짜 고치는 방법 2가지 (둘 다 시도 안 하기로 함):**
+1. CARLA를 소스에서 직접 빌드해서 `SimulateLidar` 안에
+   `TraceParams.AddIgnoredActor(GetAttachParentActor());` 한 줄 추가 (CARLA 자체
+   `ObstacleDetectionSensor.cpp`에 이미 있는 정석 패턴이라 저위험) --
+   **CarlaUE4 전체 리빌드가 필요해서 보류**. 이 프로젝트는 공식 배포 바이너리를
+   쓰고 있고, 소스 빌드+유지보수는 이번 과제 범위 대비 엔지니어링 비용이 너무 큼.
+2. 차량 블루프린트의 `CustomCollision`(레이캐스트 전용 메시, 물리 충돌체와 별도)을
+   코너 센서 위치만큼 언리얼 에디터에서 깎아내기 -- 리빌드는 불필요하지만
+   **커뮤니티에 아무도 검증한 적 없는 방법**이고 마찬가지로 언리얼 에디터 애셋
+   작업이 필요해서 보류.
+3. (기각) `world.cast_ray()` API로 커스텀 라이다 구현 -- 액터 제외 옵션도 없고,
+   레이당 별도 RPC라 실제 라이다 대비 훨씬 느림 + 정확도(simple vs complex
+   collision)도 떨어짐. 시도할 가치 없음.
+
+**결론: 이 자기폐색 문제는 현재 사용 방식(공식 CARLA 바이너리)으로는 고칠 수 없는
+CARLA 자체의 근본적 한계로 최종 확정.** 추가 조사/시도는 하지 않음.
+
 ## low / mid / high 프로파일
 
 CARLA의 ray-cast LiDAR는 points_per_second에 CPU가 비례하므로 가변 프로파일을
