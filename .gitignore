@@ -20,6 +20,15 @@ dist/
 .vscode/
 .idea/
 
+# Flutter/Android build caches (any app/, not just awsim_tesla/soongsil)
+.kotlin/
+.gradle/
+.dart_tool/
+**/android/gradlew
+**/android/gradlew.bat
+**/android/local.properties
+*.iml
+
 # Autoware maps (large, download via scripts/download_carla_maps.sh)
 autoware_map/
 autoware-contents/
