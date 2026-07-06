@@ -96,6 +96,12 @@ FCollisionQueryParams TraceParams = FCollisionQueryParams(FName(TEXT("Laser_Trac
 **결론: 이 자기폐색 문제는 현재 사용 방식(공식 CARLA 바이너리)으로는 고칠 수 없는
 CARLA 자체의 근본적 한계로 최종 확정.** 추가 조사/시도는 하지 않음.
 
+**업스트림 PR 제출함** (2026-07-06): 위 1번 패치(`AddIgnoredActor(GetAttachParentActor())`)를
+`carla-simulator/carla`에 직접 제출 — https://github.com/carla-simulator/carla/pull/9804
+(fork: `hwkim3330/carla-upstream-fix`, 브랜치: `fix/lidar-self-occlusion`). 로컬 빌드/테스트는
+안 했고 기존 코드 패턴 기반 리뷰용 기여. 머지되면 이 프로젝트의 자기폐색 한계도
+해소될 수 있음 -- 상태는 PR 링크에서 확인.
+
 ## low / mid / high 프로파일
 
 CARLA의 ray-cast LiDAR는 points_per_second에 CPU가 비례하므로 가변 프로파일을
