@@ -239,14 +239,28 @@ Visualization Manager:
         Delta Range: 10
         Enabled: true
         Max Alpha: 0.5
-        Max Range: 140
+        Max Range: 135
         Max Wave Alpha: 0.5
         Min Alpha: 0.01
         Min Wave Alpha: 0.01
-        Name: PolarGridDisplay
+        Name: PolarGridDisplay_G32_135m
         Reference Frame: base_link
         Value: true
         Wave Color: 255; 255; 255
+        Wave Velocity: 40
+      - Class: rviz_plugins/PolarGridDisplay
+        Color: 0; 212; 255
+        Delta Range: 10
+        Enabled: true
+        Max Alpha: 0.4
+        Max Range: 110
+        Max Wave Alpha: 0.0
+        Min Alpha: 0.0
+        Min Wave Alpha: 0.0
+        Name: PolarGridDisplay_Pandar_110m
+        Reference Frame: base_link
+        Value: true
+        Wave Color: 0; 212; 255
         Wave Velocity: 40
       - Class: autoware_overlay_rviz_plugin/SignalDisplay
         Enabled: true
