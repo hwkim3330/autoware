@@ -17,18 +17,38 @@
 #   5. e2e must use `launch_sensing_driver:=false` (still partially loads Nebula; see
 #      docs/awsim_setup.md - sensor-kit pipeline is the remaining gap).
 #
-# STILL-OPEN (sensor pipeline): distortion_corrector "IMU time_stamp is too late" ->
-# no concatenated cloud -> NDT no input -> /initialpose3d never set. See docs.
+# RESOLVED (2026-07-06): localization/routing/AUTONOMOUS-engage all confirmed working
+# end-to-end (real Shinjuku pose seeded, route planned, tablet tap-to-go engages). See
+# docs/awsim_setup.md "RESOLVED 2026-07-06" section for the fixes that got it there
+# (awsim_sensor_kit + cloud_relay.py's row_step fix + FastDDS discovery server + CPU
+# pinning). distortion_corrector "IMU time_stamp is too late" still fires occasionally
+# but does not block the pipeline by itself.
+#
+# STILL-OPEN (performance): under full AWSIM+Autoware load this 16-thread box hits
+# load average ~26 (AWSIM alone ~200-290% CPU) -> map->base_link TF publish rate drops
+# to ~0.25 Hz (measured; should be 20-50 Hz) -> gear sticks at PARK (v=0) even with
+# AUTONOMOUS engaged, despite CPU-pinning localization to its own cores (the actual
+# bottleneck traced to AWSIM's own sim-loop rate under contention, not Autoware-side
+# scheduling -- reassigning the sensing-pipeline pointcloud_container to the
+# localization core group made no measurable difference).
+# Mitigations applied below: (a) MaxVehicleCount=0 via --json_path (no background NPC
+# traffic to simulate/render -- this flag was previously silently ignored: AWSIM
+# requires an explicit `--json_path <file>` argument to load ANY config at all, which
+# this script never passed, so sample-config.json's settings never took effect).
+# If load is still high, try lowering -screen-width/-screen-height further.
 set +e
 SUDO() { echo 1 | sudo -S "$@" 2>/dev/null; }
 DK() { echo 1 | sudo -S docker exec autoware bash -c "$1" 2>/dev/null; }
 DKD() { echo 1 | sudo -S docker exec -d autoware bash -c "$1" 2>/dev/null; }
 MAP=/root/autoware_map/shinjuku
 AWSIM=/opt/awsim/AWSIM-Demo
+REPO=/home/kim/autoware-keti
 
 echo "==> [0/4] one-time container prep (idempotent)"
 DK "command -v vulkaninfo >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq vulkan-tools mesa-vulkan-drivers libvulkan1; }"
 DK "test -x $AWSIM/AWSIM-Demo.x86_64 || echo 'MISSING: docker cp ~/AWSIM/AWSIM-Demo autoware:/opt/awsim/'"
+# MaxVehicleCount=0 (no background NPC traffic -- see header note on --json_path).
+SUDO docker cp "$REPO/container_patches/awsim_config.json" autoware:/opt/awsim/AWSIM-Demo/awsim_config.json 2>/dev/null
 # Keep distortion ENABLED: it produces /sensing/lidar/top/pointcloud_before_sync (the chain
 # needs it; disabling it kills before_sync entirely). The "Twist/IMU too late" warnings are
 # intermittent - before_sync still flows (~26k pts). Ensure the default is back to true.
@@ -76,7 +96,6 @@ rclpy.spin(n)
 PYEOF
 
 # copy the perception stub (clear-road for the planner) + tablet gateway into the container
-REPO=/home/kim/autoware-keti
 SUDO docker cp "$REPO/ros/perception_stub.py" autoware:/root/perception_stub.py 2>/dev/null
 SUDO docker cp "$REPO/ros/ros_ws_gateway.py"  autoware:/root/ros_ws_gateway.py  2>/dev/null
 SUDO docker cp "$REPO/ros/awsim_gate_override.py" autoware:/root/awsim_gate_override.py 2>/dev/null
@@ -108,7 +127,8 @@ DKD "unset AMENT_PREFIX_PATH ROS_DISTRO RMW_IMPLEMENTATION LD_LIBRARY_PATH PYTHO
      export DISPLAY=:1 XAUTHORITY=/root/.Xauthority VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json
      export ROS_DISCOVERY_SERVER=127.0.0.1:11811
      ulimit -n 65536
-     cd $AWSIM && ./AWSIM-Demo.x86_64 -force-vulkan -screen-width 1280 -screen-height 720 > /tmp/awsim_demo.log 2>&1"
+     cd $AWSIM && ./AWSIM-Demo.x86_64 -force-vulkan -screen-width 1280 -screen-height 720 \
+       --json_path $AWSIM/awsim_config.json > /tmp/awsim_demo.log 2>&1"
 sleep 10; DISPLAY=:1 wmctrl -a AWSIM 2>/dev/null; sleep 33
 echo "    AWSIM GPU: $(nvidia-smi --query-compute-apps=process_name,used_memory --format=csv,noheader 2>/dev/null | grep -i awsim || echo 'NOT RENDERING')"
 
