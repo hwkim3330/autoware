@@ -20,6 +20,9 @@ dist/
 .vscode/
 .idea/
 
+# Claude Code session/worktree state (agent isolation artifacts)
+.claude/
+
 # Flutter/Android build caches (any app/, not just awsim_tesla/soongsil)
 .kotlin/
 .gradle/
