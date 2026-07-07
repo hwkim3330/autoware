@@ -394,7 +394,15 @@ class Bridge(Node):
         # red light ahead drives this. tl QoS = transient_local (the selector latches).
         self.vlim_pub = None
         try:
-            from tier4_planning_msgs.msg import VelocityLimit
+            # autoware_internal_planning_msgs, NOT tier4_planning_msgs: the deployed
+            # autoware_external_velocity_limit_selector (the actual subscriber on
+            # input/velocity_limit_from_api -> this topic) depends on
+            # autoware_internal_planning_msgs per its package.xml. Same field layout
+            # either way, but ROS2 topics are typed -- publishing the tier4_planning_msgs
+            # variant here would never match the real subscriber and silently do nothing
+            # (this WAS the bug: the red-light-stop feature below used that wrong type
+            # for a while before this was caught, so it never actually took effect).
+            from autoware_internal_planning_msgs.msg import VelocityLimit
             self._VelocityLimit = VelocityLimit
             qos_tl = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -478,8 +486,13 @@ class Bridge(Node):
         self.pub_manrev = self.create_publisher(_Bool, "/roii/manual_reverse", 1)
         self._Act, self._Bool = _Act, _Bool
         self.cli_pause = self.create_client(SetPause, "/control/vehicle_cmd_gate/set_pause", callback_group=cbg)
+        # Real service is operation_mode_transition_manager's control_mode_request,
+        # remapped to /control/control_mode_request (confirmed via the deployed
+        # launch file + rclcpp::Client<ControlModeCommand> symbol in its .so) -- was
+        # pointed at /input/control_mode_request, which nothing provides, so
+        # wait_for_service always timed out and this call never actually fired.
         self.cli_control_mode = self.create_client(
-            ControlModeCommand, "/input/control_mode_request", callback_group=cbg)
+            ControlModeCommand, "/control/control_mode_request", callback_group=cbg)
         self.teleop = {"v": 0.0, "steer": 0.0, "until": 0.0}
         self._teleop_armed = False
         self.create_timer(0.01, self._teleop_tick, callback_group=cbg)  # sim-time backup
@@ -1175,18 +1188,24 @@ class Bridge(Node):
                     done += 1
             except Exception:
                 pass
-        # external velocity limit topic (takes effect immediately on the smoother)
+        # external velocity limit topic (takes effect immediately on the smoother).
+        # Reuse the same publisher the red-light-stop feature uses (see __init__) --
+        # two Publisher objects on one topic from the same node is redundant, and this
+        # is also the topic/type that was mismatched until just now.
         try:
-            from autoware_internal_planning_msgs.msg import VelocityLimit
-            if not hasattr(self, "pub_vlim"):
-                self.pub_vlim = self.create_publisher(
-                    VelocityLimit, "/planning/scenario_planning/max_velocity_default", 1)
-                time.sleep(0.3)
-            m = VelocityLimit()
-            m.stamp = self.get_clock().now().to_msg()
-            m.max_velocity = float(ms)
-            self.pub_vlim.publish(m)
-            done += 1
+            if self.vlim_pub is not None:
+                m = self._VelocityLimit()
+                m.stamp = self.get_clock().now().to_msg()
+                m.max_velocity = float(ms)
+                m.sender = "roii_gateway_maxvel"
+                self.vlim_pub.publish(m)
+                self._vlim_now = float(ms)
+                # Now that vlim_pub actually reaches the selector (see __init__ note),
+                # the red-light-stop check below would otherwise immediately overwrite
+                # this with the hardcoded NORMAL_VLIM on its next tick -- update the
+                # "restore to normal" target to the user's actual chosen cruise speed.
+                self.NORMAL_VLIM = float(ms)
+                done += 1
         except Exception as e:
             self.get_logger().warn(f"vlim pub: {e}")
         self._res(f"max speed -> {kmh:.0f} km/h ({done} applied)")
