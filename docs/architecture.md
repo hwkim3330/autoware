@@ -66,6 +66,10 @@ AWSIM으로 대체하기로 결정되어 실제 구현/스크립트는 존재하
 CENTERPOINT=1 ./run.sh roii low [Town] # + GPU CenterPoint 객체검출
 YOLOX=1 ./run.sh roii low [Town]       # + 전방 카메라 GPU YOLOX 검출
 
+# --- 게이트웨이 수동조작 경로 (docs/gateway_control_path.md) ---
+USE_ADAPI_MANUAL=1 ./run.sh gateway [Town]  # 공식 AD API manual-control 경로 (미검증, 옵트인)
+                                              # 안 켜면 기본 /external/selected/* 직접발행 경로
+
 # --- 실제 지도 (CARLA 없이 planning_simulator) ---
 ./run.sh real [/root/autoware_map/<site>]   # 기본: sample-map-planning
 ./run.sh buildmap [site] [size]             # OSM/NGII -> lanelet2 지도 생성 (기본: pangyo, 1200)
