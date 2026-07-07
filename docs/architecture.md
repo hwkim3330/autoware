@@ -119,6 +119,8 @@ AWSIM은 `run.sh`에 연결되어 있지 않고 `scripts/run_awsim.sh`를 직접
 - `docs/gateway_commands.md` — WebSocket 게이트웨이 명령어 레퍼런스
 - `docs/gateway_control_path.md` — 수동조작(teleop) 제어경로: 공식 Autoware 배선 vs 실제
   구현, 양쪽 백엔드(CARLA/AWSIM)가 왜 게이트를 바이패스하게 됐는지 히스토리 + 근본원인
+- `docs/awsim_modding_investigation.md` — AWSIM 모딩(새 맵/ROii 4-LiDAR) 가능성 조사:
+  바이너리 직접 모딩 불가 확인, 유니티 소스 저장소 현황, 필요 절차, 카를라 대안 비교
 - `docs/awsim_setup.md` — AWSIM 백엔드 설정 및 현재 막힌 지점
 - `docs/niro_system.md` — Niro 실차 구성 (듀얼 측위, 실제 지도)
 - `docs/autoware_carla_integration.md` — CARLA 통합 전체 디버깅 히스토리

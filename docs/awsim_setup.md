@@ -304,30 +304,8 @@ launch-file topic wiring, which is what the previous pass was missing.
 The CARLA + real-map (판교/K-City planning_sim) + niro multimode + HMI gateway + Tesla apps
 are all unaffected and on `main`.
 
-## ROii 4-LiDAR on AWSIM — NOT STARTED (blocked on a Unity rebuild)
+## AWSIM 모딩 (새 맵, ROii 4-LiDAR) — 별도 문서로 이동
 
-AWSIM-Demo v2's shipped binary publishes exactly one lidar ("top"). Confirmed directly (no
-`StreamingAssets`, no `.bundle`/catalog files, `Assembly-CSharp.dll` has zero AssetBundle/
-runtime-scene-loading references, `awsim_config.json` has no map/sensor field) that there is
-**no way to add sensors without rebuilding the AWSIM Unity project** — same constraint as
-custom maps (see AWSIM's own docs: LiDARs are RGL prefabs on the Ego vehicle, added by
-duplicating a prefab + setting transform + Inspector fields; scriptable via Unity
-`-batchmode -executeMethod`, but the Editor + AWSIM source project aren't installed on this
-box yet, and that install hasn't happened as of this note).
-
-Not writing ROS2-side launch/xacro scaffolding for this yet — the topic names/structure would
-be guessing ahead of an implementation that doesn't exist. What IS worth keeping now: the
-physical ROii mount geometry, already calibrated and verified live against the CARLA actor
-(`carla_sensor_kit_description/config/sensor_kit_calibration.yaml`), which is backend-agnostic
-(same real shuttle) and should be reused as-is instead of re-measuring for AWSIM/Unity:
-
-| link | x | y | z | roll | pitch | yaw | note |
-|---|---|---|---|---|---|---|---|
-| `roii_front_g32_base_link` | 2.150 | 0.000 | 1.100 | 0 | 0 | 0 | forward-facing |
-| `roii_rear_g32_base_link` | -2.150 | 0.000 | 1.100 | 0 | 0 | π (3.141593) | rear-facing |
-| `roii_left_pandar_base_link` | 1.600 | -1.050 | 2.600 | 0 | 0 | 0 | raised from 1.900 — cabin self-occlusion ate ~90-130° of the declared 220° FOV at the lower mount |
-| `roii_right_pandar_base_link` | 1.600 | 1.050 | 2.600 | 0 | 0 | π/2 (1.570796) | +90° = pure right-facing |
-
-(Unity uses a left-handed Y-up axis convention vs ROS's right-handed Z-up — these xyz/rpy
-values need the same ROS→Unity conversion the environment mesh already goes through, not a
-straight copy-paste into a Transform component.)
+`docs/awsim_modding_investigation.md` 참고 — 바이너리 직접 모딩 가능여부(불가능, 직접 확인),
+에디터리스 가능성(절반만 가능), 소스 저장소 현황, 새 맵/라이다 추가에 필요한 절차, ROii 마운트
+스펙, 카를라 대안 비교까지 전부 정리해둠.
