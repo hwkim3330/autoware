@@ -34,22 +34,40 @@ from std_msgs.msg import Header
 
 
 def load_pcd_xyz(path):
-    """Load an ascii PCD (x y z) into an (N,3) float32 array."""
-    pts = []
-    with open(path) as f:
-        data = False
+    """Load a PCD (x y z), ascii OR binary, into an (N,3) float32 array.
+
+    Was ascii-only -- broke silently on binary PCD (opened in text mode, tried to
+    iterate "lines" over raw float32 bytes -> UnicodeDecodeError or garbage). All of
+    this project's own generated maps (gen_real_map.py) switched to binary PCD
+    2026-07-07 (ascii was ~2x the file size), so this needs to handle both."""
+    with open(path, "rb") as f:
+        header_lines = []
+        while True:
+            line = f.readline()
+            if not line:
+                return np.zeros((0, 3), np.float32)
+            header_lines.append(line)
+            if line.startswith(b"DATA"):
+                data_type = line.split()[1].decode().strip().lower()
+                break
+        if data_type == "binary":
+            width = height = 1
+            for hl in header_lines:
+                if hl.startswith(b"WIDTH"): width = int(hl.split()[1])
+                elif hl.startswith(b"HEIGHT"): height = int(hl.split()[1])
+            n = width * height
+            raw = f.read(n * 3 * 4)  # x,y,z as float32, no padding fields in our own pcds
+            return np.frombuffer(raw, dtype=np.float32, count=n * 3).reshape(n, 3)
+        # ascii: rest of the file is one "x y z ..." row per point
+        pts = []
         for line in f:
-            if not data:
-                if line.startswith("DATA"):
-                    data = True
-                continue
             p = line.split()
             if len(p) >= 3:
                 try:
                     pts.append((float(p[0]), float(p[1]), float(p[2])))
                 except ValueError:
                     pass
-    return np.array(pts, dtype=np.float32) if pts else np.zeros((0, 3), np.float32)
+        return np.array(pts, dtype=np.float32) if pts else np.zeros((0, 3), np.float32)
 
 
 class VirtualLidar(Node):

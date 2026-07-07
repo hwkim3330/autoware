@@ -108,10 +108,16 @@ DISPLAY=$DISP XAUTHORITY=$XA xhost +local: >/dev/null 2>&1 || true
 SUDO docker exec -d autoware bash -lc \
   "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export DISPLAY=$DISP; export XAUTHORITY=/root/.Xauthority; \
    source /opt/autoware/setup.bash; rviz2 -d /root/roii_clean.rviz > /tmp/rviz.log 2>&1"
-# real maps (NGII): re-seed the ego on a WELL-CONNECTED lanelet at road elevation,
-# so tap-to-go / drive works right after a switch (find_spawn picks a stub).
-case "$SITE" in
-  pangyo*|kcity*|soongsil*)
+# real maps with a real pointcloud: re-seed the ego on a WELL-CONNECTED lanelet at road
+# elevation, so tap-to-go / drive works right after a switch (find_spawn picks a stub), and
+# run a virtual LiDAR off the real cloud. Was gated by a hardcoded name-prefix case
+# (pangyo*|kcity*|soongsil*) -- silently skipped every new location added since (yongin_guseong,
+# seoul_gangnam, yongin_pangyo_commute all start with neither prefix, none would have gotten
+# virtual lidar/reseed at all). Gate on the pcd actually being real data instead: some pangyo*
+# dirs (pangyo itself) only ever got a ~4KB GNSS-only placeholder pcd, never real point data --
+# 10KB cleanly separates that from the smallest genuine cloud we have (soongsil, ~28KB).
+PCD_FILE="$HOME/autoware_map/$SITE/pointcloud_map.pcd"
+if [ -f "$PCD_FILE" ] && [ "$(stat -c%s "$PCD_FILE" 2>/dev/null || echo 0)" -gt 10240 ]; then
     # virtual LiDAR: live scan from the 3D map cloud follows the ego (CARLA-like
     # live cloud on the real precise map; planning_sim has no real sensors)
     SUDO docker exec -d autoware bash -lc \
@@ -122,7 +128,6 @@ case "$SITE" in
     SUDO docker exec autoware bash -lc \
       "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; \
        python3 /root/seed_realmap_start.py $SITE 2>/dev/null" 2>/dev/null | grep -E "seed|seeded" || true
-    ;;
-esac
+fi
 echo "Done. Tablet: DRIVE or tap the map. (planning sim: perfect localization, no CARLA)"
 exit 0
