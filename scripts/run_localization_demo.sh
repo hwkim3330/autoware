@@ -151,6 +151,12 @@ SUDO docker cp "$REPO/container_patches/autoware_carla_interface.launch.xml" \
 SUDO docker cp "$REPO/container_patches/behavior_planning.launch.xml" \
   autoware:/opt/autoware/share/tier4_planning_launch/launch/scenario_planning/lane_driving/behavior_planning/behavior_planning.launch.xml >/dev/null 2>&1
 
+# Per-sensor publish workers (ported from autoware_universe 0.51.0's carla_ros.py, see
+# container_patches/sensor_publish_worker.py): camera/lidar publish moves off CARLA's
+# synchronous tick thread so a slow publish can't stall simulation time itself.
+SUDO docker cp "$REPO/container_patches/sensor_publish_worker.py" \
+  autoware:/opt/autoware/lib/python3.10/site-packages/autoware_carla_interface/modules/sensor_publish_worker.py >/dev/null 2>&1
+
 # Reverse-gear patch (stock interface hardcodes DRIVE; tablet REVERSE needs it).
 SUDO docker cp "$REPO/container_patches/carla_ros.py" \
   autoware:/opt/autoware/lib/python3.10/site-packages/autoware_carla_interface/carla_ros.py >/dev/null 2>&1

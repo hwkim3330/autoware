@@ -45,6 +45,7 @@ from .modules.carla_utils import carla_rotation_to_ros_quaternion
 from .modules.carla_utils import create_cloud
 from .modules.carla_utils import ros_pose_to_carla_transform
 from .modules.carla_wrapper import SensorInterface
+from .modules.sensor_publish_worker import SensorPublishWorker
 
 
 class carla_ros2_interface(object):
@@ -297,6 +298,13 @@ class carla_ros2_interface(object):
         # Thread synchronization (protects: current_control, ego_actor, timestamp, physics_control)
         self._state_lock = threading.Lock()
 
+        # Per-sensor publish workers (ported from autoware_universe 0.51.0's carla_ros.py --
+        # see modules/sensor_publish_worker.py): run_step() calls camera()/lidar() inline from
+        # CARLA's synchronous tick loop, so a slow publish (big image, reliable QoS) stalls the
+        # whole sim clock. Workers move the publish off that thread with a bounded, latest-wins
+        # queue per sensor.
+        self._publish_workers = {}
+
         # ROS-related helpers initialized later
         self.ros2_node = None
         self.ros_publisher_manager = None
@@ -331,26 +339,32 @@ class carla_ros2_interface(object):
         should_publish = self.sensor_registry.should_publish(sensor, self.timestamp)
         return not should_publish
 
-    def get_msg_header(self, frame_id):
+    def get_msg_header(self, frame_id, timestamp=None):
         """Obtain and modify ROS message header."""
+        if timestamp is None:
+            timestamp = self.timestamp
         header = Header()
         header.frame_id = frame_id
-        seconds = int(self.timestamp)
-        nanoseconds = int((self.timestamp - int(self.timestamp)) * 1000000000.0)
+        seconds = int(timestamp)
+        nanoseconds = int((timestamp - int(timestamp)) * 1000000000.0)
         header.stamp = Time(sec=seconds, nanosec=nanoseconds)
         return header
 
-    def lidar(self, carla_lidar_measurement, id_):
-        """Transform the received lidar measurement into a ROS point cloud message."""
-        if self.checkFrequency(id_):
-            return
+    def lidar(self, carla_lidar_measurement, id_, timestamp=None):
+        """Transform the received lidar measurement into a ROS point cloud message.
 
+        Runs on this sensor's publish worker thread (see _submit_to_publish_worker) --
+        frequency gating and registry bookkeeping happen at the dispatch site in
+        run_step, on the main thread, so self.timestamp is never read here: a worker
+        can still be draining an old frame after run_step has moved to a later tick
+        and overwritten self.timestamp, so timestamp must arrive as an explicit arg.
+        """
         config = self.sensor_registry.get_sensor(id_)
         if not config:
             self.logger.warning(f"No registry entry for LiDAR sensor '{id_}'")
             return
 
-        header = self.get_msg_header(frame_id=config.frame_id or "base_link")
+        header = self.get_msg_header(frame_id=config.frame_id or "base_link", timestamp=timestamp)
         fields = [
             PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
             PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
@@ -408,7 +422,6 @@ class carla_ros2_interface(object):
             return
 
         publisher.publish(point_cloud_msg)
-        self.sensor_registry.update_sensor_timestamp(id_, self.timestamp)
 
     def initialpose_callback(self, data):
         """Transform RVIZ initial pose to CARLA (thread-safe)."""
@@ -524,8 +537,13 @@ class carla_ros2_interface(object):
 
         return camera_info
 
-    def camera(self, carla_camera_data, cam_id):
-        """Handle multiple cameras with dynamic routing by sensor ID."""
+    def camera(self, carla_camera_data, cam_id, timestamp=None):
+        """Handle multiple cameras with dynamic routing by sensor ID.
+
+        Runs on this sensor's publish worker thread -- see the note on lidar()
+        about why timestamp must be passed explicitly rather than read from
+        self.timestamp here.
+        """
         config = self.sensor_registry.get_sensor(cam_id)
         if not config:
             self.logger.warning(f"No registry entry for camera '{cam_id}'")
@@ -533,9 +551,6 @@ class carla_ros2_interface(object):
 
         if cam_id not in self.camera_info_cache:
             self.camera_info_cache[cam_id] = self._build_camera_info(carla_camera_data)
-
-        if self.checkFrequency(cam_id):
-            return
 
         # Create image message
         image_array = numpy.ndarray(
@@ -545,7 +560,7 @@ class carla_ros2_interface(object):
         )
         img_msg = self.cv_bridge.cv2_to_imgmsg(image_array, encoding="bgra8")
         img_msg.header = self.get_msg_header(
-            frame_id=config.frame_id or f"{cam_id}/camera_optical_link"
+            frame_id=config.frame_id or f"{cam_id}/camera_optical_link", timestamp=timestamp
         )
 
         # Publish camera info
@@ -559,7 +574,6 @@ class carla_ros2_interface(object):
         img_pub = self.pub_camera.get(cam_id)
         if img_pub:
             img_pub.publish(img_msg)
-            self.sensor_registry.update_sensor_timestamp(cam_id, self.timestamp)
 
     def imu(self, carla_imu_measurement):
         """Transform and publish IMU measurement to ROS."""
@@ -719,6 +733,14 @@ class carla_ros2_interface(object):
         self.pub_gear_state.publish(out_gear_state)
         self.sensor_registry.update_sensor_timestamp("status", self.timestamp)
 
+    def _submit_to_publish_worker(self, key, fn, *args):
+        """Run a publish call on the sensor's worker thread (created lazily)."""
+        worker = self._publish_workers.get(key)
+        if worker is None:
+            worker = SensorPublishWorker(key, self.logger)
+            self._publish_workers[key] = worker
+        worker.submit(fn, args)
+
     def run_step(self, input_data, timestamp):
         """Execute main simulation step for publishing sensor data and getting control commands.
 
@@ -755,12 +777,21 @@ class carla_ros2_interface(object):
                 )
                 continue
 
+            # Camera and lidar conversion/publishing run on per-sensor worker threads:
+            # publishing multi-megabyte messages inline (reliable-QoS camera images in
+            # particular block on DDS flow control) would stall this loop and slow
+            # simulation time itself. Frequency gating and registry bookkeeping stay on
+            # this thread so the registry is never accessed concurrently.
             if sensor_type == "sensor.camera.rgb":
-                self.camera(data[1], key)  # Pass sensor ID for multi-camera support
+                if not self.checkFrequency(key):
+                    self.sensor_registry.update_sensor_timestamp(key, self.timestamp)
+                    self._submit_to_publish_worker(key, self.camera, data[1], key, self.timestamp)
             elif sensor_type == "sensor.other.gnss":
                 self.pose()
             elif sensor_type == "sensor.lidar.ray_cast":
-                self.lidar(data[1], key)
+                if not self.checkFrequency(key):
+                    self.sensor_registry.update_sensor_timestamp(key, self.timestamp)
+                    self._submit_to_publish_worker(key, self.lidar, data[1], key, self.timestamp)
             elif sensor_type == "sensor.other.imu":
                 self.imu(data[1])
             else:
@@ -779,6 +810,11 @@ class carla_ros2_interface(object):
         Properly destroys publishers, stops the spin thread, and shuts down rclpy
         to prevent process hanging and publisher leaks.
         """
+        # Stop publish workers before destroying the publishers they use
+        for worker in self._publish_workers.values():
+            worker.stop()
+        self._publish_workers.clear()
+
         # Destroy publishers first
         if self.ros_publisher_manager:
             self.ros_publisher_manager.destroy_all_publishers()
