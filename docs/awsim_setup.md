@@ -191,6 +191,48 @@ low-risk hedges. Still open: the CPU/TF-starvation root cause of "gear stuck at 
 (see "Still-open" section above) — none of this pass's fixes directly address AWSIM's own
 sim-loop rate collapsing under system load.
 
+## RESOLVED 2026-07-07 — manual teleop (app joystick) was ALSO gate-bypassing
+
+Follow-up to the code audit above: the reason app-based manual driving on AWSIM felt "weird"
+turned out to be the exact same anti-pattern as `awsim_gate_override.py` (removed 2026-06-xx
+for the autonomous-mode path), just never caught for the manual-teleop path. Traced by reading
+the actual `vehicle_cmd_gate.launch.xml` remaps in the deployed container:
+
+- `ros_ws_gateway.py`'s `_teleop_tick()` (runs whenever the app arms manual/joystick control)
+  was publishing gear + control commands directly to `/control/command/{control_cmd,gear_cmd}`
+  — confirmed via the gate's own launch file to be `output/control_cmd` and `output/gear_cmd`,
+  i.e. the gate's OWN OUTPUT, which `vehicle_cmd_gate_exe` also publishes to from its
+  arbitration logic. The code's own top-comment even said it should go through
+  `/external/selected/*` — the code just never matched what the comment claimed.
+- Two publishers on one topic race non-deterministically. AWSIM has no actor-direct backup
+  path (unlike CARLA's `_carla_loop`, which drives the CARLA actor directly regardless of what
+  lands on this topic) — so on AWSIM this raced visibly as gear/control flicker during manual
+  driving, and is the likely explanation for the pre-existing "flaky right after forward
+  driving" note on manual reverse.
+- **Fix**: retargeted `pub_ctrl`/`pub_gear` to `/external/selected/control_cmd` and
+  `/external/selected/gear_cmd` — confirmed via `vehicle_cmd_gate.launch.xml`'s
+  `input/external/{control_cmd,gear_cmd}` remaps to be exactly the gate's intended external
+  command channel. `external_cmd_selector`/`external_cmd_converter` (also in this stack, both
+  launched by default) only republish to those topics when THEY receive local/remote pedal
+  input, which nothing in this project feeds, so the gateway remains the sole publisher — no
+  new race introduced. Added a `/external/selected/heartbeat` publish too, since
+  `check_external_emergency_heartbeat` defaults `true` on the gate and that topic was
+  previously never fed at all.
+- Deleted `ros/awsim_gate_override.py` (confirmed dead: `run_awsim.sh` stopped launching it a
+  while ago, only a leftover `docker cp` deployment line and a `pgrep` status-check remained;
+  both removed too).
+- Side benefit: `roii_watchdog.py`/`roii_fault_detector.py`/`roii_reconfig_manager.py` all use
+  `count_publishers("/control/command/control_cmd") > 0` as a control-pipeline health check.
+  Previously, our own direct publish there during manual teleop would have counted as "a
+  publisher" regardless of whether the gate/pipeline itself was actually healthy — a latent
+  false-negative in those health checks during manual driving, incidentally fixed by no longer
+  publishing there ourselves.
+
+Not yet verified live (no spare compute for this pass, same as above) — this is a
+well-evidenced, low-risk fix (topic names confirmed directly against the gate's own launch
+file, not guessed) but should be checked against a real manual-drive session on AWSIM once one
+is run.
+
 ## (historical) Resolution paths considered before the in-container approach
 1. **Install ROS2 humble RUNTIME libs on the host** (at least libspdlog1.9/libfmt8 + rcl deps,
    or a minimal `ros-humble-rmw-fastrtps-cpp`), so AWSIM-Labs runs NATIVELY on the host where

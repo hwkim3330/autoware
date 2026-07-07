@@ -147,7 +147,6 @@ PYEOF
 # copy the perception stub (clear-road for the planner) + tablet gateway into the container
 SUDO docker cp "$REPO/ros/perception_stub.py" autoware:/root/perception_stub.py 2>/dev/null
 SUDO docker cp "$REPO/ros/ros_ws_gateway.py"  autoware:/root/ros_ws_gateway.py  2>/dev/null
-SUDO docker cp "$REPO/ros/awsim_gate_override.py" autoware:/root/awsim_gate_override.py 2>/dev/null
 
 # OPTIMIZATION (verified 2026-06-29): on this 16-core box AWSIM+full-Autoware saturate CPU
 # (~95%), so secondary publishers (/tf, perception monitors) dip below the diagnostic rate
@@ -226,11 +225,12 @@ DK "$FASTDDS . /opt/autoware/setup.bash; ulimit -n 65536
 sleep 8
 
 echo "==> [3.6] gateway (Tesla tablet feed, WS :8765)"
-# REMOVED awsim_gate_override: it was a workaround for when Autoware couldn't engage. Now that
-# the Discovery Server makes localization+planning work and Autoware engages properly, the
-# override DOUBLE-PUBLISHES /control/command/{control_cmd,gear_cmd} against the real
-# vehicle_cmd_gate -> AWSIM (last-writer-wins) flickers gear DRIVE<->PARK. The real gate alone
-# drives cleanly. (use_emergency_handling:=false already stops the gate's own PARK-on-diag.)
+# REMOVED (and deleted 2026-07-07): awsim_gate_override.py was a workaround for when
+# Autoware couldn't engage. It DOUBLE-PUBLISHED /control/command/{control_cmd,gear_cmd}
+# against the real vehicle_cmd_gate -> AWSIM (last-writer-wins) flickers gear DRIVE<->PARK.
+# The same anti-pattern was ALSO present in ros_ws_gateway.py's manual-teleop path (fixed
+# 2026-07-07: now goes through /external/selected/* instead). The real gate alone drives
+# cleanly. (use_emergency_handling:=false already stops the gate's own PARK-on-diag.)
 DKD "$FASTDDS ulimit -n 65536
      export LANELET_OSM=/root/autoware_map/shinjuku/lanelet2_map.osm NIRO_ORIGIN='35.237658,138.793822' NIRO_SITE='shinjuku' DISPLAY=:1 XAUTHORITY=/root/.Xauthority
      source /opt/autoware/setup.bash; python3 -u /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
@@ -243,7 +243,7 @@ sleep 4; DISPLAY=:1 wmctrl -a AWSIM 2>/dev/null   # keep AWSIM focused
 
 echo "==> [4/4] status"
 DK "echo 'relay: '\$(grep relayed /tmp/relay.log 2>/dev/null|tail -1)
-    echo 'gateway: '\$(pgrep -fc ros_ws_gateway) ' procs ; override: '\$(pgrep -fc awsim_gate_override)' procs ; perception_stub: '\$(pgrep -fc perception_stub)' procs'
+    echo 'gateway: '\$(pgrep -fc ros_ws_gateway) ' procs ; perception_stub: '\$(pgrep -fc perception_stub)' procs'
     echo 'NDT pose_buffer<2 (stops growing when converged): '\$(grep -c 'pose_buffer_.size() < 2' /tmp/awsim_aw.log)
     echo 'duplicate relay node check (should be 0 -- confirms the sed above actually removed it): '\$(grep -c pointcloud_relay_ring_to_concat /tmp/awsim_aw.log)"
 echo "Done. Tablet feed: ws://127.0.0.1:8765/ws  (app: com.keti.awsim_tesla, adb reverse tcp:8765 tcp:8765)"

@@ -422,15 +422,35 @@ class Bridge(Node):
         # ---- manual teleop (joystick) ----
         # External (manual joystick) control path: gate EXTERNAL + unpause, then
         # publish to /external/selected/* which the gate forwards to the vehicle.
-        # Direct injection onto the interface's control input (proven to move the
-        # ego). We are a second publisher on the gate-output topic; at high rate we
-        # win the contention enough to drive. Plus arm the gate EXTERNAL+unpause so
-        # the gate itself stops emitting brake.
+        # Manual teleop goes through vehicle_cmd_gate's OWN external-input channel
+        # (armed via /control/gate_mode_cmd=EXTERNAL below), NOT its output topics.
+        # Was: publishing straight to /control/command/{control_cmd,gear_cmd} -- the
+        # gate's own OUTPUT, which vehicle_cmd_gate_exe ALSO publishes to from its
+        # arbitration logic. Two publishers on one topic race non-deterministically;
+        # on AWSIM (no actor-direct backup path, unlike CARLA's _carla_loop below)
+        # this was the same double-publish pattern already diagnosed and removed for
+        # the autonomous-mode path (see run_awsim.sh's "REMOVED awsim_gate_override"
+        # note) -- just reproduced here for the manual/teleop path instead. Fix:
+        # publish to /external/selected/{control_cmd,gear_cmd}, which is exactly what
+        # vehicle_cmd_gate.launch.xml remaps input/external/{control_cmd,gear_cmd} to.
+        # external_cmd_selector/external_cmd_converter (also in this stack) only
+        # republish there when THEY receive local/remote pedal input, which nothing in
+        # this project feeds -- so we're the sole publisher on this topic, no race.
         cmd_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                              reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST)
-        self.pub_ctrl = self.create_publisher(Control, "/control/command/control_cmd", cmd_qos)
+        self.pub_ctrl = self.create_publisher(Control, "/external/selected/control_cmd", cmd_qos)
         self.pub_gate = self.create_publisher(GateMode, "/control/gate_mode_cmd", 1)
-        self.pub_gear = self.create_publisher(GearCommand, "/control/command/gear_cmd", cmd_qos)
+        self.pub_gear = self.create_publisher(GearCommand, "/external/selected/gear_cmd", cmd_qos)
+        # check_external_emergency_heartbeat defaults true on vehicle_cmd_gate; feed
+        # input/external_emergency_stop_heartbeat (-> /external/selected/heartbeat) so
+        # the gate doesn't treat a missing heartbeat as a fault once EXTERNAL mode is armed.
+        from tier4_external_api_msgs.msg import Heartbeat as _Heartbeat
+        self._Heartbeat = _Heartbeat
+        self.pub_heartbeat = self.create_publisher(_Heartbeat, "/external/selected/heartbeat", cmd_qos)
+        # emergency_cmd has no external-input remap on the gate at all (it's purely the
+        # gate's own computed OUTPUT of output/vehicle_cmd_emergency) -- publishing here
+        # is a keep-alive "not emergency" assertion for whatever the vehicle interface
+        # expects, not a bypass of a real arbitrated input, so left as-is.
         self.pub_emergency_cmd = self.create_publisher(
             VehicleEmergencyStamped, "/control/command/emergency_cmd", cmd_qos)
         # Manual control bypasses the cmd_gate by publishing actuation directly to
@@ -559,6 +579,7 @@ class Bridge(Node):
         e = VehicleEmergencyStamped(); e.stamp = now
         e.emergency = False
         self.pub_emergency_cmd.publish(e)
+        self.pub_heartbeat.publish(self._Heartbeat(stamp=now))
         g = GearCommand(); g.stamp = now
         g.command = 20 if tp["v"] < -0.01 else 2   # 20=REVERSE, 2=DRIVE
         c = Control(); c.stamp = now
@@ -572,9 +593,11 @@ class Bridge(Node):
         # after forward driving can be flaky (gate gear/hold interaction).
         c.longitudinal.acceleration = 4.0 if tp["v"] > 0 else (4.0 if tp["v"] < 0 else 0.0)
         c.lateral.steering_tire_angle = tp["steer"]
-        # Direct path: gear + control straight to the topics AWSIM reads (gate bypass).
-        # Reverses from a clean stop (verified 23m). Can be flaky right after forward
-        # driving due to the gate's gear output flickering DRIVE<->REVERSE.
+        # Through the gate's external-input channel (see __init__ note) -- the gate
+        # arbitrates and emits the single, non-racing output AWSIM/CARLA read. The old
+        # "flaky right after forward driving" note (gate's own gear output flickering
+        # DRIVE<->REVERSE against our direct publish) was this exact race; should no
+        # longer apply now that we're not a second publisher on that output topic.
         self.pub_gear.publish(g)
         self.pub_ctrl.publish(c)
         rev = tp["v"] < -0.05
