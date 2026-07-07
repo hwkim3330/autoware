@@ -386,17 +386,25 @@ done
 # -> it gates AUTONOMOUS availability (car won't engage). Kill all + restart ONE
 # each + bounce the ros2 daemon so stale DDS participants are dropped.
 if [ -n "${ROII_PROFILE:-}" ]; then
-  SUDO docker exec autoware bash -c 'pkill -9 -f "roii_lidar_health_monitor|roii_lidar_fault_injector|roii_gnss_fault_injector|roii_fault_detector|roii_reconfig_manager"; exit 0' >/dev/null 2>&1
+  # roii_reconfig_manager.py used to be deployed here too -- confirmed dead code
+  # (2026-07-07 audit): its _detect_faults()/_evaluate() chain was never wired to
+  # any timer or subscription, so it never published /roii/driving_mode, which
+  # nothing consumed anyway. roii_watchdog.py's docstring says "재구성 관리자
+  # (통합)" for a reason -- it already has the complete, correctly-wired version
+  # of this same logic (own _detect/_evaluate, injector-status subscriptions,
+  # publishes /roii/reconfig_status which the gateway actually reads) and is
+  # deployed unconditionally below regardless of ROII_PROFILE. Removed the file
+  # and this dead deployment rather than fixing the wiring, to avoid running two
+  # copies of the same mode-transition logic.
+  SUDO docker exec autoware bash -c 'pkill -9 -f "roii_lidar_health_monitor|roii_lidar_fault_injector|roii_gnss_fault_injector|roii_fault_detector"; exit 0' >/dev/null 2>&1
   sleep 3
   SUDO docker cp "$REPO/ros/roii_fault_detector.py"   autoware:/root/roii_fault_detector.py   >/dev/null 2>&1
-  SUDO docker cp "$REPO/ros/roii_reconfig_manager.py" autoware:/root/roii_reconfig_manager.py >/dev/null 2>&1
   SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_fault_injector.py --ros-args -p use_sim_time:=true > /tmp/roii_injector.log 2>&1"
   SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_health_monitor.py --ros-args -p use_sim_time:=true > /tmp/roii_monitor.log 2>&1"
   SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_gnss_fault_injector.py --ros-args -p use_sim_time:=true > /tmp/roii_gnss_injector.log 2>&1"
   SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_fault_detector.py --ros-args -p use_sim_time:=true > /tmp/roii_detector.log 2>&1"
-  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_reconfig_manager.py --ros-args -p use_sim_time:=true > /tmp/roii_reconfig.log 2>&1"
   SUDO docker exec autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 daemon stop >/dev/null 2>&1; ros2 daemon start >/dev/null 2>&1" >/dev/null 2>&1
-  echo "    ROii nodes: fault_injector + health_monitor + gnss_injector + fault_detector + reconfig_manager"
+  echo "    ROii nodes: fault_injector + health_monitor + gnss_injector + fault_detector (+ watchdog/reconfig always-on)"
 fi
 
 echo "==> [5/5] Waiting for localization to converge..."

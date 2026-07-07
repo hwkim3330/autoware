@@ -5,40 +5,37 @@
 
 감시 대상:
   Sensors:  front_g32, rear_g32, left_pandar, right_pandar (LiDAR rate)
-            gnss (pose covariance + staleness)
+            gnss (rate)
             imu  (rate)
-  Modules:  localization (NDT Hz, pose jump)
-            planning    (trajectory rate)
+  Modules:  localization (NDT Hz)
+            planning    (trajectory presence)
             control     (cmd rate)
-  Comms:    gateway WS client count (링크 상태)
 
 장애 유형 (FaultType):
   NONE            정상
   RATE_LOW        토픽 발행 빈도 저하 (임계 이하)
   STALE           데이터 수신 없음 (타임아웃)
-  TIMESTAMP_FAULT 타임스탬프 이상 (미래/과거 오프셋 > 2s)
-  COVARIANCE_HIGH GNSS 위치 불확실도 과다
-  POSE_JUMP       연속 pose 간 거리 돌변 (측위 이상)
-  MODULE_DEGRADED Autoware 모듈 Hz 저하
 
 Status:
   /roii/fault_report  (std_msgs/String, JSON) — 1 Hz
+
+Note (2026-07-07): this file deliberately monitors via count_publishers() only, no
+message subscriptions, to avoid the DDS crash pattern this project hit early on
+with heavier subscription loads. That constraint means timestamp-offset, GNSS
+covariance, and pose-jump detection (which need the actual message payload) belong
+in a node that IS allowed to subscribe -- roii_watchdog.py does the injector-aware
+per-sensor differentiation this file doesn't attempt.
 """
 
 import json
-import math
 import time
 import threading
 
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
-from sensor_msgs.msg import PointCloud2, Imu
-from geometry_msgs.msg import PoseWithCovarianceStamped
-from nav_msgs.msg import Odometry
-from autoware_planning_msgs.msg import Trajectory
 from std_msgs.msg import String
 
 # ---------- 임계값 ----------
@@ -48,9 +45,6 @@ IMU_RATE_MIN     = 2.0   # Hz  (publisher count 기반; CARLA IMU 실제 15Hz)
 NDT_RATE_MIN     = 2.0   # Hz  (publisher count 기반)
 PLAN_RATE_MIN    = 0.3   # Hz  (publisher count 기반)
 STALE_SEC        = 2.0   # 마지막 메시지 이후 이 시간 지나면 STALE
-TS_OFFSET_MAX    = 2.0   # 타임스탬프와 시스템 시간 차이 허용 최대 (초)
-GNSS_COV_MAX     = 25.0  # 위치 분산 최대 (m²) — 5m std
-POSE_JUMP_MAX    = 5.0   # 연속 pose 간 최대 허용 거리 (m)
 
 LIDARS = ("front_g32", "rear_g32", "left_pandar", "right_pandar")
 
@@ -88,31 +82,16 @@ class FaultDetector(Node):
         super().__init__("roii_fault_detector")
         self.set_parameters([Parameter('use_sim_time', Parameter.Type.BOOL, True)])
 
-        be = QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT,
-                        history=HistoryPolicy.KEEP_LAST)
-        re = QoSProfile(depth=5, reliability=ReliabilityPolicy.RELIABLE,
-                        history=HistoryPolicy.KEEP_LAST)
-
         # rate estimators
         self.lidar_re  = {s: RateEstimator() for s in LIDARS}
         self.gnss_re   = RateEstimator()
         self.imu_re    = RateEstimator()
         self.ndt_re    = RateEstimator()
-        self.plan_re   = RateEstimator()
         self.ctrl_re   = RateEstimator()
-
-        # last pose for jump detection
-        self._last_ndt  = None
-        self._last_gnss = None
-        self.lock = threading.Lock()
 
         # 모든 토픽 감시: 메시지 구독 없이 publisher count 기반 (DDS 크래시 방지)
         # 0.2s 타이머 → 5Hz tick → rate estimator 5Hz (LIDAR_RATE_MIN=5Hz와 동일)
-        self._plan_pub_ok = False
         self.create_timer(0.2, self._check_all_pubs)
-
-        # injector status: 타이머로 직접 읽기 (구독 대신)
-        self._injector_status = {}
 
         self.pub = self.create_publisher(String, "/roii/fault_report", 1)
         self.create_timer(1.0, self._report_tick)
@@ -131,19 +110,6 @@ class FaultDetector(Node):
             self.ndt_re.tick()
         if self.count_publishers("/control/command/control_cmd") > 0:
             self.ctrl_re.tick()
-
-    # ---------- callbacks ----------
-    # injector status는 reconfig_manager에서 직접 읽으므로 여기서 제거
-    def _gnss_cb(self, m): pass
-    def _imu_cb(self, m): pass
-    def _ndt_cb(self, m): pass
-    def _plan_cb(self, m): pass
-
-    def _check_plan_pub(self):
-        # publisher가 있으면 planning은 살아있는 것으로 간주
-        pubs = self.count_publishers("/planning/scenario_planning/trajectory")
-        if pubs > 0:
-            self.plan_re.tick()
 
     # ---------- fault classification ----------
     def _classify_rate(self, estimator, min_rate, name):
@@ -169,17 +135,14 @@ class FaultDetector(Node):
         now = time.monotonic()
         report = {"ts": time.time(), "sensors": {}, "modules": {}, "comms": {}}
 
-        # LiDAR — concatenated rate로 전체 상태, 개별은 injector status에서
+        # LiDAR: all 4 report the same concatenated-topic rate (this file only ever
+        # sees the merged /sensing/lidar/concatenated/pointcloud publisher count, no
+        # per-sensor signal) -- per-LiDAR differentiation using injector status is
+        # roii_watchdog.py's job, which does subscribe to it.
         concat_fault, concat_rate = self._classify_rate(
             list(self.lidar_re.values())[0], LIDAR_RATE_MIN, "concat")
-        inj = self._injector_status
         for s in LIDARS:
-            inj_mode = inj.get(s, {}).get("mode", "normal") if inj else "normal"
-            if inj_mode != "normal":
-                ftype, rate = inj_mode.upper(), 0.0
-            else:
-                ftype, rate = concat_fault, concat_rate
-            report["sensors"][s] = {"fault": ftype, "rate_hz": round(rate, 2)}
+            report["sensors"][s] = {"fault": concat_fault, "rate_hz": round(concat_rate, 2)}
 
         # GNSS
         g_fault, g_rate, g_cov = self._classify_gnss()

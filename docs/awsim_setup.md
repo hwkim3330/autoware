@@ -221,7 +221,8 @@ the actual `vehicle_cmd_gate.launch.xml` remaps in the deployed container:
 - Deleted `ros/awsim_gate_override.py` (confirmed dead: `run_awsim.sh` stopped launching it a
   while ago, only a leftover `docker cp` deployment line and a `pgrep` status-check remained;
   both removed too).
-- Side benefit: `roii_watchdog.py`/`roii_fault_detector.py`/`roii_reconfig_manager.py` all use
+- Side benefit: `roii_watchdog.py`/`roii_fault_detector.py` (`roii_reconfig_manager.py` deleted
+  2026-07-07, was dead code) all use
   `count_publishers("/control/command/control_cmd") > 0` as a control-pipeline health check.
   Previously, our own direct publish there during manual teleop would have counted as "a
   publisher" regardless of whether the gate/pipeline itself was actually healthy — a latent
