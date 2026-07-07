@@ -493,6 +493,43 @@ class Bridge(Node):
         # wait_for_service always timed out and this call never actually fired.
         self.cli_control_mode = self.create_client(
             ControlModeCommand, "/control/control_mode_request", callback_group=cbg)
+        # Official AD API manual-control path (autoware_default_adapi_universe's
+        # ManualControlNode, launched by default as /api/manual/local -- confirmed via
+        # the full include chain: e2e_simulator.launch.xml -> autoware.launch.xml ->
+        # tier4_autoware_api_component -> tier4_autoware_api_launch/autoware_api.launch.xml
+        # (launch_default_adapi:=true by default) -> default_adapi.launch.py). This is
+        # almost certainly what the original efbabe6 commit's unused
+        # ManualOperatorHeartbeat import was meant for, before it got abandoned for the
+        # direct-bypass hack. Feeds local/PEDALS into external_cmd_selector ->
+        # external_cmd_converter (pedals+steering -> control_cmd via accel/brake/steer
+        # calibration curves, the generic autoware_raw_vehicle_cmd_converter default
+        # maps since neither run_awsim.sh nor run_localization_demo.sh override them)
+        # -> gate, same as the direct /external/selected/* path above -- still needs
+        # gate_mode=EXTERNAL and is_engaged_=true, which this does NOT set by itself.
+        # Opt-in and UNTESTED (no live verification done yet, particularly whether the
+        # generic accel/brake maps interact sanely with AWSIM's reverse-negates-accel
+        # quirk documented in run_awsim.sh) -- the direct path above stays the default
+        # so a bad interaction here doesn't regress what's already been fixed.
+        self._use_adapi_manual = os.environ.get("USE_ADAPI_MANUAL", "0") == "1"
+        if self._use_adapi_manual:
+            from autoware_adapi_v1_msgs.msg import PedalsCommand as _Pedals
+            from autoware_adapi_v1_msgs.msg import SteeringCommand as _Steer
+            from autoware_adapi_v1_msgs.msg import ManualControlMode as _MCMode
+            from autoware_adapi_v1_msgs.msg import Gear as _AdapiGear
+            from autoware_adapi_v1_msgs.msg import GearCommand as _AdapiGearCmd
+            from autoware_adapi_v1_msgs.srv import SelectManualControlMode as _SelectMCMode
+            self._Pedals, self._Steer = _Pedals, _Steer
+            self._MCMode, self._AdapiGear, self._AdapiGearCmd = _MCMode, _AdapiGear, _AdapiGearCmd
+            adapi_ns = "/api/manual/local"
+            self.pub_adapi_pedals = self.create_publisher(_Pedals, f"{adapi_ns}/command/pedals", cmd_qos)
+            self.pub_adapi_steer = self.create_publisher(_Steer, f"{adapi_ns}/command/steering", cmd_qos)
+            self.pub_adapi_heartbeat = self.create_publisher(
+                ManualOperatorHeartbeat, f"{adapi_ns}/operator/heartbeat", cmd_qos)
+            self.pub_adapi_gear = self.create_publisher(_AdapiGearCmd, f"{adapi_ns}/command/gear", cmd_qos)
+            self._SelectMCMode = _SelectMCMode
+            self.cli_select_manual = self.create_client(
+                _SelectMCMode, f"{adapi_ns}/control_mode/select", callback_group=cbg)
+            self._adapi_manual_selected = False
         self.teleop = {"v": 0.0, "steer": 0.0, "until": 0.0}
         self._teleop_armed = False
         self.create_timer(0.01, self._teleop_tick, callback_group=cbg)  # sim-time backup
@@ -529,6 +566,15 @@ class Bridge(Node):
                 self.cli_control_mode.call_async(req)
         except Exception:
             pass
+        if self._use_adapi_manual and not self._adapi_manual_selected:
+            try:
+                if self.cli_select_manual.wait_for_service(timeout_sec=0.2):
+                    req = self._SelectMCMode.Request()
+                    req.mode.mode = self._MCMode.PEDALS
+                    self.cli_select_manual.call_async(req)
+                    self._adapi_manual_selected = True
+            except Exception as e:
+                self.get_logger().warn(f"adapi select_manual_control_mode: {e}")
         self._teleop_armed = True
         self._res("manual teleop active")
 
@@ -643,6 +689,32 @@ class Bridge(Node):
         # Dedicated reverse latch -> interface (gear_cmd is overridden by the
         # gate's PARK, so this is what actually flips CARLA into reverse).
         b = self._Bool(); b.data = bool(rev); self.pub_manrev.publish(b)
+
+        # Official AD API manual-control path (see __init__ note) -- runs ALONGSIDE
+        # the direct pub_ctrl/pub_gear path above, not instead of it, since this is
+        # opt-in/untested. Both ultimately feed the same gate, but through different
+        # upstream hops (this one via external_cmd_selector+external_cmd_converter's
+        # pedal/steer calibration curves instead of a hand-built Control message), so
+        # whichever's "later" write wins on /external/selected/* if both are live --
+        # keep USE_ADAPI_MANUAL unset unless deliberately testing this path.
+        if self._use_adapi_manual:
+            if not self._adapi_manual_selected:
+                self._arm_teleop()  # retries the mode-select call
+            mag = min(abs(tp["v"]) / 6.0, 1.0)
+            pedals = self._Pedals(); pedals.stamp = now
+            if abs(tp["v"]) < 0.05:
+                pedals.throttle = 0.0; pedals.brake = 0.4
+            else:
+                pedals.throttle = mag; pedals.brake = 0.0
+            self.pub_adapi_pedals.publish(pedals)
+            steer_cmd = self._Steer(); steer_cmd.stamp = now
+            steer_cmd.steering_tire_angle = tp["steer"]
+            self.pub_adapi_steer.publish(steer_cmd)
+            self.pub_adapi_heartbeat.publish(ManualOperatorHeartbeat(stamp=now, ready=True))
+            gear_cmd = self._AdapiGearCmd(); gear_cmd.stamp = now
+            gear_cmd.command.status = self._AdapiGear.REVERSE if rev else self._AdapiGear.DRIVE
+            self.pub_adapi_gear.publish(gear_cmd)
+
         # Publish actuation DIRECTLY to the interface (bypasses the cmd_gate,
         # which parks/brakes when not engaged). accel for forward; for reverse
         # send brake_cmd -- the interface's reverse patch maps brake->throttle

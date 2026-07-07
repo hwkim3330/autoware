@@ -1,12 +1,16 @@
 # 게이트웨이 수동조작(teleop) 제어 경로 — 공식 대비 실제
 
 `ros_ws_gateway.py`는 Autoware 공식 컴포넌트가 아니다. 태블릿 앱의 단순 `{cmd:teleop,v,steer}`
-WebSocket 메시지를 Autoware의 실제 ROS2 토픽/서비스로 번역해주는 자체 제작 브릿지다. Autoware
-자체엔 "앱/조이스틱으로 조작하기"에 대한 공식 표준 클라이언트가 없고, 있는 건 물리적
-페달/스티어링 휠 하드웨어를 위해 설계된 오래된 TIER IV 배선(`external_cmd_selector` →
-`external_cmd_converter` → `vehicle_cmd_gate`)뿐이다. 이 문서는 그 공식 배선이 실제로 뭘
-요구하는지, 이 프로젝트가 지금까지 뭘 했는지, 왜 여러 번 바이패스로 흘렀는지를 실제 소스
-코드 기준으로 정리한다.
+WebSocket 메시지를 Autoware의 실제 ROS2 토픽/서비스로 번역해주는 자체 제작 브릿지다.
+
+**정정 (2026-07-07)**: 아래 있던 "Autoware엔 앱/조이스틱 조작용 공식 표준 클라이언트가 없다"는
+서술은 틀렸었음 — `autoware_default_adapi_universe`의 `ManualControlNode`(`/api/manual/local`,
+`/api/manual/remote`)가 정확히 그 역할을 하는 공식 AD API고, 우리 `e2e_simulator.launch.xml` 그래프에
+기본으로 이미 떠있음 (아래 "공식 AD API 경로" 섹션 참고). 처음 이 게이트웨이를 만들 때
+(`efbabe6`) `ManualOperatorHeartbeat`를 import해놓고 안 쓴 게 바로 이거 쓰려다 만 흔적이었음.
+물리 페달/스티어링 휠용 저수준 배선(`external_cmd_selector` → `external_cmd_converter` →
+`vehicle_cmd_gate`)이라는 서술 자체는 여전히 맞음 — `ManualControlNode`도 결국 그 배선 위에
+얹혀서 "local" 모드로 명령을 흘려보내는 상위 레이어일 뿐임.
 
 ## 공식 배선 (양쪽 백엔드 공통, autoware_universe 소스 확인)
 
@@ -103,3 +107,34 @@ WebSocket 메시지를 Autoware의 실제 ROS2 토픽/서비스로 번역해주�
 코드를 보면, 이 문서의 3조건(gate_mode/is_engaged_/명령발행)부터 확인하고, 안 되면
 `autowarefoundation/autoware_universe`의 해당 노드 소스를 직접 받아서 읽을 것
 (`gh api repos/autowarefoundation/autoware_universe/contents/<path>`).
+
+## 추가 (2026-07-07) — 진짜 공식 AD API 경로 발견, 옵트인으로 추가함
+
+게이트웨이 전체를 소스 대조하며 점검하다가 발견: `autoware_default_adapi_universe`의
+`ManualControlNode`가 정확히 "앱에서 페달/스티어링으로 조작"용으로 설계된 공식 AD API고,
+`system/autoware_default_adapi_universe/src/manual_control.cpp` 확인 결과 이미 우리
+그래프에 기본으로 떠있음 — include 체인 전부 직접 추적해서 확인:
+
+```
+e2e_simulator.launch.xml → autoware.launch.xml → tier4_autoware_api_component.launch.xml
+→ tier4_autoware_api_launch/autoware_api.launch.xml (launch_default_adapi:=true, 기본값)
+→ default_adapi.launch.py → ManualControlNode (manual/local, manual/remote)
+```
+
+동작 방식: `/api/manual/local/control_mode/select` 서비스(mode=PEDALS)로 활성화하면
+`/api/manual/local/command/{pedals,steering,gear}` + `/api/manual/local/operator/heartbeat`를
+구독 시작, `/external/local/*`로 그대로 릴레이 → `external_cmd_selector`(local 모드) →
+`external_cmd_converter`(페달+스티어링을 accel/brake/steer 캘리브레이션 커브로 control_cmd 변환)
+→ 게이트. 여전히 `gate_mode=EXTERNAL` + `is_engaged_=true`는 별도로 필요함 (이 노드가
+그걸 대신 해주진 않음).
+
+**구현**: `ros/ros_ws_gateway.py`에 `USE_ADAPI_MANUAL=1` 환경변수로 켜지는 옵트인 경로로
+추가함 (기본 꺼짐, 기존 `/external/selected/*` 직접발행 경로는 그대로 유지 — "남겨두고 새로
+작업" 방침). `_arm_teleop()`에서 `SelectManualControlMode(PEDALS)` 호출, `_teleop_tick()`에서
+`PedalsCommand`(throttle/brake)+`SteeringCommand`+heartbeat+adapi `GearCommand` 발행.
+
+**미검증**: 라이브 테스트 안 해봄. 특히 걱정되는 지점 — `external_cmd_converter`가 쓰는
+accel/brake 맵은 `run_awsim.sh`/`run_localization_demo.sh` 둘 다 오버라이드 안 해서
+`autoware_raw_vehicle_cmd_converter`의 범용 기본 커브(`data/default/*.csv`)를 씀, AWSIM 전용
+튜닝이 아님. 이게 AWSIM의 "후진 시 accel 부호 반전" 특이사항(`run_awsim.sh` 헤더 참고)과
+어떻게 상호작용할지 실제로 안 켜보면 모름 — 그래서 기존 경로를 기본값으로 유지함.
