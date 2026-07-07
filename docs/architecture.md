@@ -122,6 +122,9 @@ AWSIM은 `run.sh`에 연결되어 있지 않고 `scripts/run_awsim.sh`를 직접
 - `docs/roii_lidar_carla_autoware.md` — ROii 4-LiDAR 상세 (센서 스펙, 커버리지 조사)
 - `docs/roii_fault_reconfig.md` — ROii 장애감지·재구성 시스템 구조 (6개 노드 역할, 데이터
   흐름, sensor_mapping 파일 두 계열 구분)
+- `docs/large_map_tiling_concept.md` — 대규모/여러 지역 맵 구상: 오토웨어 공식 타일 스트리밍
+  기능(`autoware_map_loader` partial/differential pointcloud loading) 조사, 카를라 쪽은
+  여전히 지역별 개별 로드 필요
 - `docs/gateway_commands.md` — WebSocket 게이트웨이 명령어 레퍼런스
 - `docs/gateway_control_path.md` — 수동조작(teleop) 제어경로: 공식 Autoware 배선 vs 실제
   구현, 양쪽 백엔드(CARLA/AWSIM)가 왜 게이트를 바이패스하게 됐는지 히스토리 + 근본원인
