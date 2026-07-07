@@ -116,6 +116,8 @@ AWSIM은 `run.sh`에 연결되어 있지 않고 `scripts/run_awsim.sh`를 직접
 
 - `README.md` — CARLA 백엔드 빠른 시작, 트러블슈팅 로그
 - `docs/roii_lidar_carla_autoware.md` — ROii 4-LiDAR 상세 (센서 스펙, 커버리지 조사)
+- `docs/roii_fault_reconfig.md` — ROii 장애감지·재구성 시스템 구조 (6개 노드 역할, 데이터
+  흐름, sensor_mapping 파일 두 계열 구분)
 - `docs/gateway_commands.md` — WebSocket 게이트웨이 명령어 레퍼런스
 - `docs/gateway_control_path.md` — 수동조작(teleop) 제어경로: 공식 Autoware 배선 vs 실제
   구현, 양쪽 백엔드(CARLA/AWSIM)가 왜 게이트를 바이패스하게 됐는지 히스토리 + 근본원인
