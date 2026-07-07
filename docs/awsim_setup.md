@@ -120,6 +120,77 @@ existing patch doesn't cover yet.
    a community fix exists: rebuild `rclcpp` from TIER IV's fork (`t4-main` branch) instead
    of upstream ROS 2 Humble (https://github.com/orgs/autowarefoundation/discussions/6480).
 
+## RESOLVED 2026-07-07 — code audit vs official AWSIM/Autoware repos
+
+Systematically compared this project's `run_awsim.sh` against the official
+`autowarefoundation/AWSIM` and `autowarefoundation/autoware` repos/docs. Findings, in order
+of confidence:
+
+- **Duplicate concatenated-pointcloud publisher (real bug, fixed)**: the deployed
+  `awsim_sensor_kit_launch/lidar.launch.xml` (already trimmed to single-lidar, see below)
+  had its OWN `topic_tools::RelayNode` composable node (`pointcloud_relay_ring_to_concat`)
+  doing a raw, uncorrected `before_sync -> concatenated/pointcloud` relay — confirmed
+  loading successfully in a past run's log (`Loaded node
+  '/sensing/lidar/concatenated/pointcloud_relay_ring_to_concat' in container
+  'pointcloud_container'`). This runs concurrently with `cloud_relay.py` ([3.4]), which
+  ALSO publishes to the same topic but additionally fixes AWSIM's `row_step=0` bug. Two
+  independent publishers on one topic race non-deterministically, so NDT's subscriber can
+  land on either the broken (empty after PCL parse) or the fixed message — a very plausible
+  cause of the intermittent `pose_buffer_.size() < 2` stalls already tracked in `[4/4]`
+  status. **Fixed**: `run_awsim.sh` now deletes this composable-node block via `sed` in step
+  `[0/4]`; applied directly to the running `autoware-shm:latest` image too. `[4/4]` status
+  now also greps for the node name (should read 0 on the next run).
+- **RMW/DDS vendor (CycloneDDS rejected, confirmed at the binary level)**: official Autoware
+  docs recommend `rmw_cyclonedds_cpp` over the FastDDS-based setup this project uses.
+  Checked directly: `AWSIM-Demo`'s bundled `ros2-for-unity` plugins have `rosidl` typesupport
+  compiled for ~77 Autoware message packages, but **only against
+  `rosidl_typesupport_fastrtps`** — 0 packages have CycloneDDS typesupport built in (the
+  bundled `librmw_cyclonedds_cpp.so` is a bare RMW shim with no per-message typesupport at
+  all, so it can't actually serialize any real topic). Switching Autoware's
+  `RMW_IMPLEMENTATION` to CycloneDDS would desync it from AWSIM's own bridge entirely, not
+  fix the (already-different) discovery problem the official guidance addresses. The FastDDS
+  Discovery Server this project already uses is the correct choice for this specific binary,
+  not a shortcut that should be replaced.
+- **`use_distortion_corrector` sed (dead code, removed)**: the arg is declared in
+  `lidar.launch.xml` but never referenced anywhere in the file body — there is no
+  `distortion_corrector` node in this simplified single-lidar pipeline at all, so forcing it
+  `true`/`false` had zero effect either way. The intermittent "IMU time_stamp is too late"
+  warning comes from elsewhere in the graph. Removed the sed; the misleading "keep distortion
+  ENABLED, it produces before_sync" comment was based on a stale understanding of the file.
+- **sensor_kit lidar count (already correct for this deployment, no change)**: the pristine
+  upstream `awsim_sensor_kit_launch` (tier4/AWSIM) ships top+left+right (3 lidars). The copy
+  actually deployed in this container has already been trimmed to top-only, matching what
+  AWSIM-Demo v2 actually publishes — this is a deliberate local simplification of the
+  official file, not an oversight, and is correct as-is.
+- **Build type (confirmed Release, no change)**: `readelf -S` on `vehicle_cmd_gate_exe` (and
+  the other checked binaries) shows no `.debug*` sections and small stripped binary sizes —
+  consistent with the official `ghcr.io/autowarefoundation/autoware:universe-cuda` image
+  being a Release build. Not a Debug-build slowdown.
+- **`vehicle_cmd_gate` gear-forces-PARK-while-disengaged (issue #2052 pattern, inconclusive)**:
+  a historical, closed upstream bug where the gate forced PARK/DRIVE based on engagement
+  state instead of echoing the current gear when disengaged — a plausible alternate
+  explanation for the "gear stuck at PARK" symptom above, independent of pure CPU load. Could
+  not fully re-verify against this exact binary (no source tree in the runtime image, only
+  compiled `.so`/mangled symbols); the issue predates the currently-deployed
+  `autoware_launch` 0.50.0 and is presumed fixed upstream. As a cheap, safe hedge regardless:
+  widened `system_emergency_heartbeat_timeout` from `0.5s` to `3.0s` in
+  `vehicle_cmd_gate.param.yaml` — 0.5s is tight for this box's measured load spikes (load avg
+  ~26), and if that specific heartbeat topic gets starved under load it can force emergency
+  behavior independent of the `use_emergency_handling` flag already set to `false`.
+- **UDP/sysctl tuning (applied)**: raised `net.core.rmem_max`/`wmem_max` to 2 GiB and
+  `net.ipv4.ipfrag_high_thresh` to 128 MiB / `ipfrag_time` to 3s (official CycloneDDS-doc
+  values, but the underlying kernel UDP buffers are vendor-independent — helps FastDDS the
+  same way). Previous host values (rmem_max 33 MB, ipfrag_high_thresh 4 MB, ipfrag_time 30s)
+  were well under the documented recommendation for ~130-participant graphs with
+  multi-megabyte PointCloud2 messages.
+
+None of the above have been verified with a fresh end-to-end run yet (box was intentionally
+kept off for this pass — no spare compute at the time). The duplicate-relay-node fix is the
+one most likely to move the needle on the NDT stall symptom; the sysctl/heartbeat changes are
+low-risk hedges. Still open: the CPU/TF-starvation root cause of "gear stuck at PARK" itself
+(see "Still-open" section above) — none of this pass's fixes directly address AWSIM's own
+sim-loop rate collapsing under system load.
+
 ## (historical) Resolution paths considered before the in-container approach
 1. **Install ROS2 humble RUNTIME libs on the host** (at least libspdlog1.9/libfmt8 + rcl deps,
    or a minimal `ros-humble-rmw-fastrtps-cpp`), so AWSIM-Labs runs NATIVELY on the host where

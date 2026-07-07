@@ -36,6 +36,43 @@
 # requires an explicit `--json_path <file>` argument to load ANY config at all, which
 # this script never passed, so sample-config.json's settings never took effect).
 # If load is still high, try lowering -screen-width/-screen-height further.
+#
+# CODE AUDIT vs official AWSIM/Autoware repos (2026-07-07), what changed and why:
+#  - RMW: official Autoware docs recommend rmw_cyclonedds_cpp. Checked directly against
+#    the AWSIM-Demo binary: it bundles rosidl typesupport for ~77 Autoware msg packages
+#    compiled ONLY against rosidl_typesupport_fastrtps (0 for cyclonedds -- the bundled
+#    librmw_cyclonedds_cpp.so is a bare rmw shim with no per-message typesupport at all).
+#    Switching Autoware's RMW_IMPLEMENTATION would desync it from AWSIM's own bridge, not
+#    fix anything -- REJECTED. The FastDDS discovery-server setup below is correct for
+#    this specific binary, not a shortcut.
+#  - Duplicate concatenated-pointcloud publisher (real bug, fixed below): the deployed
+#    awsim_sensor_kit_launch/lidar.launch.xml has its own topic_tools::RelayNode
+#    ("pointcloud_relay_ring_to_concat") composable node doing a raw, uncorrected
+#    before_sync -> concatenated/pointcloud relay, loading successfully alongside our
+#    cloud_relay.py (which additionally fixes AWSIM's row_step=0 bug). Two independent
+#    publishers on the same topic race non-deterministically -- NDT's subscriber can land
+#    on either the broken (empty after PCL parse) or the fixed message, which matches the
+#    intermittent "pose_buffer_.size() < 2" stalls already tracked in [4/4] status. Fixed
+#    by deleting the XML-embedded relay node; cloud_relay.py remains the sole publisher.
+#  - use_distortion_corrector sed (removed, was dead code): the arg is declared in
+#    lidar.launch.xml but never referenced anywhere in the file body -- there is no
+#    distortion_corrector node in this simplified single-lidar pipeline at all, so
+#    forcing the arg true/false has zero effect either way. The intermittent "IMU
+#    time_stamp is too late" warning comes from elsewhere in the graph, not this arg.
+#  - sensor_kit lidar count: official awsim_sensor_kit_launch (tier4/AWSIM upstream)
+#    ships top+left+right (3 lidars). The copy actually deployed in this container has
+#    already been trimmed to top-only, matching what AWSIM-Demo v2 actually publishes --
+#    correct for this binary, just not the pristine upstream file. No change needed.
+#  - Build type: readelf on vehicle_cmd_gate_exe (and friends) shows no .debug* sections
+#    and small stripped binary sizes -- consistent with the official ghcr.io
+#    universe-cuda image being a Release build, not Debug. No change needed.
+#  - vehicle_cmd_gate gear-forces-PARK-while-disengaged (issue #2052 pattern): historical,
+#    closed upstream (gate echoes current gear instead of defaulting PARK when
+#    disengaged) -- can't fully re-verify against this exact binary without source, but
+#    it predates the currently-deployed autoware_launch 0.50.0 and is presumed fixed.
+#    system_emergency_heartbeat_timeout (0.5s) is tight for this box's measured load
+#    spikes (load avg ~26) though, so it's widened defensively below -- cheap, safe hedge
+#    independent of whether #2052 itself still applies.
 set +e
 SUDO() { echo 1 | sudo -S "$@" 2>/dev/null; }
 DK() { echo 1 | sudo -S docker exec autoware bash -c "$1" 2>/dev/null; }
@@ -49,10 +86,12 @@ DK "command -v vulkaninfo >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=
 DK "test -x $AWSIM/AWSIM-Demo.x86_64 || echo 'MISSING: docker cp ~/AWSIM/AWSIM-Demo autoware:/opt/awsim/'"
 # MaxVehicleCount=0 (no background NPC traffic -- see header note on --json_path).
 SUDO docker cp "$REPO/container_patches/awsim_config.json" autoware:/opt/awsim/AWSIM-Demo/awsim_config.json 2>/dev/null
-# Keep distortion ENABLED: it produces /sensing/lidar/top/pointcloud_before_sync (the chain
-# needs it; disabling it kills before_sync entirely). The "Twist/IMU too late" warnings are
-# intermittent - before_sync still flows (~26k pts). Ensure the default is back to true.
-DK "sed -i 's|<arg name=\\\"use_distortion_corrector\\\" default=\\\"false\\\"/>|<arg name=\\\"use_distortion_corrector\\\" default=\\\"true\\\"/>|' /opt/autoware/share/awsim_sensor_kit_launch/launch/lidar.launch.xml"
+# Remove the duplicate concatenated-pointcloud publisher: awsim_sensor_kit_launch's
+# lidar.launch.xml has its OWN topic_tools::RelayNode composable node relaying
+# before_sync -> concatenated/pointcloud raw/uncorrected, racing with cloud_relay.py
+# (started in [3.4] below, which additionally fixes AWSIM's row_step=0 messages). Two
+# publishers on one topic -> NDT's subscriber intermittently gets the broken one.
+DK "sed -i '/<load_composable_node target=/,/<\\/load_composable_node>/d' /opt/autoware/share/awsim_sensor_kit_launch/launch/lidar.launch.xml"
 # Official AWSIM bring-up does not pin CPUs; let Linux schedule AWSIM and Autoware across all cores.
 SUDO docker update --cpuset-cpus="" autoware >/dev/null 2>&1 || true
 # AWSIM demo mode: vehicle_cmd_gate sees stale planning/localization diagnostics as
@@ -60,12 +99,22 @@ SUDO docker update --cpuset-cpus="" autoware >/dev/null 2>&1 || true
 # runtime ros2 param set is unreliable here because FastDDS discovery can miss the
 # composable node while the graph is busy.
 DK "sed -i 's/use_emergency_handling: true/use_emergency_handling: false/' /opt/autoware/share/autoware_launch/config/control/vehicle_cmd_gate/vehicle_cmd_gate.param.yaml"
+# system_emergency_heartbeat_timeout defaults to 0.5s -- too tight for this box's measured
+# load spikes (load avg ~26, see header). If the heartbeat topic itself gets starved under
+# load, the gate can force emergency behavior independent of use_emergency_handling above.
+DK "sed -i 's/system_emergency_heartbeat_timeout: 0.5/system_emergency_heartbeat_timeout: 3.0/' /opt/autoware/share/autoware_launch/config/control/vehicle_cmd_gate/vehicle_cmd_gate.param.yaml"
 # DDS transport: default SHM+UDP (shared host /dev/shm via --ipc=host) is what works for
 # data flow + localization. (Tried: isolated /dev/shm -> no data flow; UDP-only profile ->
 # "Not enough memory in the buffer stream" on node init + preprocessing breaks.) Known
 # residual: FastDDS SHM doesn't deliver the TRANSIENT_LOCAL latched route/map to the
 # scenario_selector process -> no trajectory -> autonomous unavailable (driving blocked).
 SUDO ip link set lo multicast on
+# UDP receive/reassembly headroom for large PointCloud2/Image messages over loopback under
+# ~130 participants (vendor-independent -- helps FastDDS same as the officially-documented
+# CycloneDDS values). Was rmem_max=33MB/ipfrag_high_thresh=4MB/ipfrag_time=30s; raise toward
+# the official recommendation.
+SUDO sysctl -w net.core.rmem_max=2147483647 net.core.wmem_max=2147483647 \
+  net.ipv4.ipfrag_time=3 net.ipv4.ipfrag_high_thresh=134217728 >/dev/null
 # FastDDS DISCOVERY SERVER: default simple (multicast) discovery is unreliable at ~115
 # participants -> new nodes (relay/gnss feed/probes) fail to match -> no delivery -> EKF<->NDT
 # loop never closes. A central discovery server gives reliable matching + clean participant-id
@@ -195,5 +244,6 @@ sleep 4; DISPLAY=:1 wmctrl -a AWSIM 2>/dev/null   # keep AWSIM focused
 echo "==> [4/4] status"
 DK "echo 'relay: '\$(grep relayed /tmp/relay.log 2>/dev/null|tail -1)
     echo 'gateway: '\$(pgrep -fc ros_ws_gateway) ' procs ; override: '\$(pgrep -fc awsim_gate_override)' procs ; perception_stub: '\$(pgrep -fc perception_stub)' procs'
-    echo 'NDT pose_buffer<2 (stops growing when converged): '\$(grep -c 'pose_buffer_.size() < 2' /tmp/awsim_aw.log)"
+    echo 'NDT pose_buffer<2 (stops growing when converged): '\$(grep -c 'pose_buffer_.size() < 2' /tmp/awsim_aw.log)
+    echo 'duplicate relay node check (should be 0 -- confirms the sed above actually removed it): '\$(grep -c pointcloud_relay_ring_to_concat /tmp/awsim_aw.log)"
 echo "Done. Tablet feed: ws://127.0.0.1:8765/ws  (app: com.keti.awsim_tesla, adb reverse tcp:8765 tcp:8765)"
