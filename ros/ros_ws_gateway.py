@@ -465,9 +465,13 @@ class Bridge(Node):
         # expects, not a bypass of a real arbitrated input, so left as-is.
         self.pub_emergency_cmd = self.create_publisher(
             VehicleEmergencyStamped, "/control/command/emergency_cmd", cmd_qos)
-        # Manual control bypasses the cmd_gate by publishing actuation directly to
-        # the CARLA interface (verified to move the ego). Reverse uses a dedicated
-        # latch the gate can't override (gear_cmd is contended by the gate's PARK).
+        # CARLA-only: raw_vehicle_cmd_converter's own output topic, direct-published
+        # here too (races against the converter -- see docs/gateway_control_path.md).
+        # Added in e78660a when the ROOT CAUSE was "cmd_gate spams PARK while not
+        # engaged" -- i.e. the same is_engaged_ gap fixed above on 2026-07-07. Kept for
+        # now since CARLA is the primary backend and this hasn't been re-verified live
+        # without it; /roii/manual_reverse (dedicated, no other publisher) stays either
+        # way as the reverse-detection latch in carla_ros.py's _set_rev.
         from tier4_vehicle_msgs.msg import ActuationCommandStamped as _Act
         from std_msgs.msg import Bool as _Bool
         self.pub_act = self.create_publisher(_Act, "/control/command/actuation_cmd", 1)
@@ -482,6 +486,9 @@ class Bridge(Node):
         threading.Thread(target=self._teleop_wall_loop, daemon=True).start()
         # CARLA direct-control backup is only for CARLA launches. In AWSIM it
         # repeatedly times out on port 2000 and can starve manual ROS publishing.
+        # Unlike pub_act above, this ISN'T a workaround for is_engaged_ -- it's a
+        # deliberate choice to skip the ROS2 gate/converter hops entirely for lower
+        # teleop latency, independent of whether the proper chain also works. Keep.
         self._carla_lock = threading.Lock()
         self._carla_direct = os.environ.get("ENABLE_CARLA_DIRECT", "0") == "1" or bool(CARLA_SPAWN)
         if self._carla_direct:
