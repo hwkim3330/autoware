@@ -233,6 +233,56 @@ well-evidenced, low-risk fix (topic names confirmed directly against the gate's 
 file, not guessed) but should be checked against a real manual-drive session on AWSIM once one
 is run.
 
+### Correction (same day) — this exact fix was already tried once and reverted; found why
+
+Caught by the user before going further: commit `efbabe6` (2026-06-09, "Manual teleop
+joystick: tablet drives the ego") already tried publishing to `/external/selected/control_cmd`
+and explicitly reverted it — commit message: *"The external/selected path didn't drive the
+vehicle; direct injection does."* So the fix above was reintroducing something with a
+documented prior failure. Went and read the actual
+`autoware_universe/control/autoware_vehicle_cmd_gate/src/vehicle_cmd_gate.cpp` source (not the
+launch-file remaps this time) to find out why, rather than guessing:
+
+```cpp
+void VehicleCmdGate::publishControlCommands(const Commands & commands) {
+  ...
+  // Check engage
+  if (!is_engaged_) {
+    filtered_control.longitudinal = createLongitudinalStopControlCmd();
+  }
+  ...
+}
+```
+
+This check runs **unconditionally**, regardless of `gate_mode` or which command source got
+selected (`auto_commands_` vs `remote_commands_`). `is_engaged_` is only set by
+`onEngage()`/`onEngageService()` — a message on `input/engage` (`/autoware/engage`,
+`autoware_vehicle_msgs/msg/Engage`) or a call to `~/service/engage`
+(`/api/autoware/set/engage`). Neither `efbabe6`'s original attempt nor this session's first
+pass at the fix ever set this. Setting `GateMode=EXTERNAL` alone was never sufficient — the
+gate forces a stop command regardless, unless `is_engaged_` is also true. The old direct-bypass
+code "worked" only because publishing straight to the gate's OUTPUT topic
+(`/control/command/control_cmd`) skips `publishControlCommands()` — and therefore this check —
+entirely. It didn't fix the gap, it routed around it (at the cost of racing the gate's own
+publisher, the bug this whole pass started from).
+
+**Actual fix, this time**: `_arm_teleop()` now also publishes `Engage(engage=true)` to
+`/autoware/engage` (3x, TRANSIENT_LOCAL so a late-joining gate still gets it) before/alongside
+the existing `GateMode=EXTERNAL` + unpause. Also found and fixed a related latent bug while
+tracing this: `_arm_teleop()` was the *only* place that ever set `GateMode`, and it always set
+`EXTERNAL` — nothing ever set it back to `AUTO`. Once manual teleop was used even once, the
+gate would stay on `remote_commands_` forever and a later autonomous engage's own trajectory
+would never reach the vehicle. `_engage()` (the autonomous-drive entry point) now publishes
+`GateMode(data=0)` (AUTO) at the start of engaging, reclaiming the gate from any prior
+manual-teleop session.
+
+QoS cross-checked against the actual subscriptions in `vehicle_cmd_gate.cpp`
+(`create_subscription<...>("input/...", 1, ...)` — plain depth-1, i.e. default
+RELIABLE/VOLATILE): our publishers use `TRANSIENT_LOCAL` (a superset of `VOLATILE` per DDS
+durability compatibility rules), so no QoS mismatch blocks this. Still not verified live — same
+compute constraint as above — but this pass is grounded in the actual gate source, not just the
+launch-file topic wiring, which is what the previous pass was missing.
+
 ## (historical) Resolution paths considered before the in-container approach
 1. **Install ROS2 humble RUNTIME libs on the host** (at least libspdlog1.9/libfmt8 + rcl deps,
    or a minimal `ros-humble-rmw-fastrtps-cpp`), so AWSIM-Labs runs NATIVELY on the host where

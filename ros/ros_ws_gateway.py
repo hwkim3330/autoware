@@ -420,8 +420,6 @@ class Bridge(Node):
         self._cmd_clock = Clock(clock_type=ClockType.SYSTEM_TIME)
         self.create_timer(0.5, self._process_cmds, callback_group=cbg)
         # ---- manual teleop (joystick) ----
-        # External (manual joystick) control path: gate EXTERNAL + unpause, then
-        # publish to /external/selected/* which the gate forwards to the vehicle.
         # Manual teleop goes through vehicle_cmd_gate's OWN external-input channel
         # (armed via /control/gate_mode_cmd=EXTERNAL below), NOT its output topics.
         # Was: publishing straight to /control/command/{control_cmd,gear_cmd} -- the
@@ -430,17 +428,31 @@ class Bridge(Node):
         # on AWSIM (no actor-direct backup path, unlike CARLA's _carla_loop below)
         # this was the same double-publish pattern already diagnosed and removed for
         # the autonomous-mode path (see run_awsim.sh's "REMOVED awsim_gate_override"
-        # note) -- just reproduced here for the manual/teleop path instead. Fix:
-        # publish to /external/selected/{control_cmd,gear_cmd}, which is exactly what
-        # vehicle_cmd_gate.launch.xml remaps input/external/{control_cmd,gear_cmd} to.
-        # external_cmd_selector/external_cmd_converter (also in this stack) only
-        # republish there when THEY receive local/remote pedal input, which nothing in
-        # this project feeds -- so we're the sole publisher on this topic, no race.
+        # note) -- just reproduced here for the manual/teleop path instead.
+        #
+        # IMPORTANT (2026-07-07, read against the actual vehicle_cmd_gate.cpp source):
+        # an EARLIER attempt at exactly this /external/selected/* fix (commit efbabe6,
+        # 2026-06-09) was reverted because "the external/selected path didn't drive the
+        # vehicle". Root cause, confirmed by reading vehicle_cmd_gate.cpp directly:
+        # publishControlCommands() unconditionally does
+        #   if (!is_engaged_) { filtered_control.longitudinal = createLongitudinalStopControlCmd(); }
+        # regardless of gate_mode or which commands source is selected -- so EXTERNAL
+        # mode alone is not enough, the gate ALSO needs is_engaged_=true, which only
+        # onEngage()/onEngageService() set (input/engage -> /autoware/engage, or the
+        # ~/service/engage -> /api/autoware/set/engage AD API service). The old direct-
+        # bypass code "worked" only because publishing straight to the gate's OUTPUT
+        # topic skips publishControlCommands()'s is_engaged_ check entirely -- it never
+        # fixed the actual gap, it routed around it. This time: publish engage=true on
+        # /autoware/engage when arming teleop (see pub_engage below), so is_engaged_ is
+        # actually true when the gate arbitrates our /external/selected/* input.
         cmd_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                              reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST)
         self.pub_ctrl = self.create_publisher(Control, "/external/selected/control_cmd", cmd_qos)
         self.pub_gate = self.create_publisher(GateMode, "/control/gate_mode_cmd", 1)
         self.pub_gear = self.create_publisher(GearCommand, "/external/selected/gear_cmd", cmd_qos)
+        from autoware_vehicle_msgs.msg import Engage as _Engage
+        self._Engage = _Engage
+        self.pub_engage = self.create_publisher(_Engage, "/autoware/engage", cmd_qos)
         # check_external_emergency_heartbeat defaults true on vehicle_cmd_gate; feed
         # input/external_emergency_stop_heartbeat (-> /external/selected/heartbeat) so
         # the gate doesn't treat a missing heartbeat as a fault once EXTERNAL mode is armed.
@@ -478,6 +490,13 @@ class Bridge(Node):
     def _arm_teleop(self):
         for _ in range(3):
             self.pub_gate.publish(GateMode(data=1)); time.sleep(0.01)
+        # Root fix (see __init__ note): vehicle_cmd_gate's publishControlCommands()
+        # forces a stop command whenever is_engaged_ is false, regardless of gate_mode
+        # or command source -- EXTERNAL mode alone was never enough, this was the
+        # missing piece that made the original /external/selected/* attempt fail.
+        now = self._cmd_clock.now().to_msg()
+        for _ in range(3):
+            self.pub_engage.publish(self._Engage(stamp=now, engage=True)); time.sleep(0.01)
         try:
             req = SetPause.Request(); req.pause = False
             self.cli_pause.call_async(req)
@@ -917,6 +936,12 @@ class Bridge(Node):
     def _engage(self, gx, gy):
         tag = f" ({gx:.0f},{gy:.0f})" if gx is not None else ""
         self._res(f"route set{tag}; engaging")
+        # If a prior manual-teleop session left the gate in EXTERNAL mode (only
+        # _arm_teleop ever sets it, nothing was ever resetting it back), the gate would
+        # keep arbitrating remote_commands_ instead of auto_commands_ forever and the
+        # planner's own trajectory would never reach the vehicle. Reclaim AUTO here.
+        self.pub_gate.publish(GateMode(data=0))
+        self._teleop_armed = False
         # Trajectory generation + autonomous AVAILABILITY can take 15-25 s on big
         # real maps. Wait for availability first (cheap topic check), THEN engage;
         # retry up to ~40 s so tap-to-go succeeds first try (was a fixed 12 s window
