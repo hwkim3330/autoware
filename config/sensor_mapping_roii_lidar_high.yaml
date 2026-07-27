@@ -2,6 +2,18 @@
 # Generated from config/roii_sensor_spec.yaml. Mount positions are PLACEHOLDERS.
 # Interface publishes .../pointcloud_raw; the fault injector republishes
 # .../pointcloud_before_sync which the ROii concatenation consumes.
+#
+# rotation_frequency MUST equal 1/fixed_delta_seconds (the sim runs synchronous
+# at 0.05 s => 20 Hz). CARLA's ray_cast only fills the fraction of a rotation
+# that elapsed since the last capture, and sensor_tick=0 makes it capture EVERY
+# sim step; at 10 Hz each capture was half a sweep, and ROS consuming at ~10 Hz
+# then dropped every other capture -- always the same phase, so half of each
+# sensor's declared horizontal_fov NEVER appeared. Measured on the roof profile
+# 2026-07-27: 170deg of azimuth empty across 24 consecutive frames, gone after
+# setting 20. Corrected here too; low/mid/high were not re-measured individually
+# but carry the identical 10-vs-0.05s mismatch. This is SEPARATE from the
+# ego-body self-occlusion of carla-simulator/carla#9804 -- but note that any
+# previously measured dead zone on these profiles conflates the two.
 default_sensor_kit_name: carla_sensor_kit_description
 sensor_mappings:
   roii_front_g32_base_link:
@@ -19,7 +31,7 @@ sensor_mappings:
       points_per_second: 300000
       upper_fov: 5.0
       lower_fov: -5.0
-      rotation_frequency: 10
+      rotation_frequency: 20
       noise_stddev: 0.0
       horizontal_fov: 135.0
   roii_rear_g32_base_link:
@@ -37,7 +49,7 @@ sensor_mappings:
       points_per_second: 300000
       upper_fov: 5.0
       lower_fov: -5.0
-      rotation_frequency: 10
+      rotation_frequency: 20
       noise_stddev: 0.0
       horizontal_fov: 135.0
   roii_left_pandar_base_link:
@@ -55,7 +67,7 @@ sensor_mappings:
       points_per_second: 500000
       upper_fov: 15.0
       lower_fov: -25.0
-      rotation_frequency: 10
+      rotation_frequency: 20
       noise_stddev: 0.0
       horizontal_fov: 220.0
   roii_right_pandar_base_link:
@@ -73,7 +85,7 @@ sensor_mappings:
       points_per_second: 500000
       upper_fov: 15.0
       lower_fov: -25.0
-      rotation_frequency: 10
+      rotation_frequency: 20
       noise_stddev: 0.0
       horizontal_fov: 220.0
   tamagawa/imu_link:

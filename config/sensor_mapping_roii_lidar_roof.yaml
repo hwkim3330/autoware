@@ -33,7 +33,15 @@ sensor_mappings:
                                   # what 4 used to (with overlap preserved)
       upper_fov: 15.0
       lower_fov: -25.0
-      rotation_frequency: 10
+      # MUST equal 1/fixed_delta_seconds (sim runs sync at 0.05 s => 20 Hz).
+      # CARLA's ray_cast fills only the fraction of a rotation that elapsed
+      # since the last capture, and sensor_tick=0 makes it capture EVERY sim
+      # step. At 10 Hz each capture was half a sweep (180deg), and since ROS
+      # consumes at ~10 Hz every other capture got dropped -- always the same
+      # phase, so 170deg of azimuth NEVER appeared. Measured 2026-07-27: bins
+      # 0..180deg full, -170..0deg exactly zero across 24 consecutive frames.
+      # sensor_mapping_lidar_only.yaml and _roii_4lidar.yaml always had 20.
+      rotation_frequency: 20
       noise_stddev: 0.0
       horizontal_fov: 360.0
   roii_front_g32_base_link:
@@ -51,7 +59,7 @@ sensor_mappings:
       points_per_second: 100000
       upper_fov: 5.0
       lower_fov: -5.0
-      rotation_frequency: 10
+      rotation_frequency: 20
       noise_stddev: 0.0
       horizontal_fov: 135.0
   roii_rear_g32_base_link:
@@ -69,7 +77,7 @@ sensor_mappings:
       points_per_second: 100000
       upper_fov: 5.0
       lower_fov: -5.0
-      rotation_frequency: 10
+      rotation_frequency: 20
       noise_stddev: 0.0
       horizontal_fov: 135.0
   roii_left_pandar_base_link:
@@ -87,7 +95,7 @@ sensor_mappings:
       points_per_second: 140000
       upper_fov: 15.0
       lower_fov: -25.0
-      rotation_frequency: 10
+      rotation_frequency: 20
       noise_stddev: 0.0
       horizontal_fov: 220.0
   roii_right_pandar_base_link:
@@ -105,7 +113,7 @@ sensor_mappings:
       points_per_second: 140000
       upper_fov: 15.0
       lower_fov: -25.0
-      rotation_frequency: 10
+      rotation_frequency: 20
       noise_stddev: 0.0
       horizontal_fov: 220.0
   tamagawa/imu_link:
