@@ -46,8 +46,21 @@ for m in re.finditer(r'<relation id="(-?\d+)"[^>]*>(.*?)</relation>', txt, re.S)
     b = m.group(2)
     if 'v="lanelet"' not in b:
         continue
-    L = re.search(r'ref="(-?\d+)" role="left"', b)
-    R = re.search(r'ref="(-?\d+)" role="right"', b)
+    # attribute order isn't guaranteed by any XML writer (JOSM emits
+    # ref-then-role, this project's own write_lanelet2() emits role-then-ref)
+    # -- match each <member> tag as a whole and pull ref/role out regardless
+    # of order, instead of assuming one fixed order.
+    L = R = None
+    for mm in re.finditer(r'<member\s+[^>]*/>', b):
+        tag = mm.group(0)
+        ref = re.search(r'ref="(-?\d+)"', tag)
+        role = re.search(r'role="(\w+)"', tag)
+        if not (ref and role):
+            continue
+        if role.group(1) == 'left':
+            L = ref
+        elif role.group(1) == 'right':
+            R = ref
     if not (L and R and L.group(1) in wy and R.group(1) in wy):
         continue
     l, r = wy[L.group(1)], wy[R.group(1)]
