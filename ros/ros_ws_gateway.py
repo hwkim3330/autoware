@@ -635,6 +635,22 @@ class Bridge(Node):
             time.sleep(0.05)
             self._teleop_tick()
 
+    def _measured_speed(self):
+        """Current ground speed in m/s, unsigned, from the odometry twist.
+
+        Same source the frame builder already uses for ego.speedKmh, so the
+        speed the operator reads on the tablet is the speed this loop regulates
+        -- no second, subtly different number. Returns 0.0 when odometry has
+        not arrived yet, which makes the first tick behave like the old
+        open-loop full throttle rather than braking against nothing.
+        """
+        with self.lock:
+            od = self.s.get("odom")
+        if not od:
+            return 0.0
+        v = od[0].twist.twist.linear
+        return math.hypot(v.x, v.y)
+
     def _teleop_tick(self):
         with self.lock:
             tp = dict(self.teleop)
@@ -653,11 +669,29 @@ class Bridge(Node):
         # applies ApplyWheelForce(-a) -> it NEGATES the accel. So reverse needs a POSITIVE
         # acceleration to thrust backward (a negative one becomes forward thrust -> won't
         # reverse). Forward (Gear.Drive) uses +a as-is. (AccelVehicle.cs L431-437.)
-        c.longitudinal.velocity = abs(tp["v"])
-        # In Gear.Reverse AWSIM negates accel (force=-a), so reverse needs a POSITIVE value
-        # to thrust backward. Reverses cleanly from a stopped/PARK state; reversing right
-        # after forward driving can be flaky (gate gear/hold interaction).
-        c.longitudinal.acceleration = 4.0 if tp["v"] > 0 else (4.0 if tp["v"] < 0 else 0.0)
+        target = abs(tp["v"])
+        c.longitudinal.velocity = target
+        # Close a speed loop instead of commanding a fixed acceleration.
+        #
+        # This used to be a flat 4.0 m/s^2 whenever v was non-zero. Since the
+        # simulators honour ONLY acceleration (see the note above), the
+        # requested velocity was decorative: the throttle was really an
+        # accelerate-forever switch. Measured 2026-07-27 from the tablet's
+        # pedal -- a 6.1 m/s request reached ~50 m/s and kept climbing. Worse,
+        # releasing the pedal sent acceleration 0.0, which is CONSTANT SPEED,
+        # not braking, so the vehicle coasted at 180 km/h until an E-STOP.
+        #
+        # Proportional on the speed error, clamped to a comfortable envelope.
+        # Zero target now produces a negative acceleration, i.e. the brake, so
+        # lifting off actually stops.
+        speed = self._measured_speed()
+        accel = max(-3.0, min(3.0, 1.6 * (target - speed)))
+        # In Gear.Reverse AWSIM negates accel (force=-a), so a POSITIVE value
+        # thrusts backward and a negative one brakes -- the same sign convention
+        # the error above already produces, so no special case is needed.
+        # Reverses cleanly from a stopped/PARK state; reversing right after
+        # forward driving can be flaky (gate gear/hold interaction).
+        c.longitudinal.acceleration = accel
         c.lateral.steering_tire_angle = tp["steer"]
         # Through the gate's external-input channel (see __init__ note) -- the gate
         # arbitrates and emits the single, non-racing output AWSIM/CARLA read. The old
