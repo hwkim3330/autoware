@@ -23,7 +23,10 @@
 set -u
 TOWN="${1:-Town04}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-CARLA_DIR=/opt/carla-simulator/CarlaUE4/Binaries/Linux
+# Overridable so a broken/older system install doesn't block using a working
+# copy elsewhere (any machine, any CARLA version) -- e.g.
+# CARLA_DIR=/home/kim/carla_fresh/CarlaUE4/Binaries/Linux bash run.sh ...
+CARLA_DIR="${CARLA_DIR:-/opt/carla-simulator/CarlaUE4/Binaries/Linux}"
 # host-side hard timeout on every sudo/docker call -- a wedged `docker exec`
 # (DDS discovery hang inside the container) froze a bring-up for 3+ hours once.
 SUDO() { timeout 180 sudo -S "$@" < <(echo 1); }
@@ -102,18 +105,30 @@ SUDO docker cp "$REPO/config/fastdds_udp.xml" autoware:/tmp/udp.xml >/dev/null 2
 # LiDAR suite: default = ROii 4-LiDAR (front/rear G32 directional + side rotating
 # Pandars, concatenated). LIDARS=1 falls back to the single velodyne_top config.
 if [ -n "${ROII_PROFILE:-}" ]; then
-  # ===== ROii 4-LiDAR experimental mode (low|mid|high) =====
+  # ===== ROii 4-LiDAR experimental mode (low|mid|high|roof) =====
+  # roof = single roof-mounted sensor + roii_lidar_slicer.py, sidesteps the
+  # corner-mount self-occlusion CARLA bug (carla#9804) that low/mid/high
+  # still carry. Separate _roof calibration/xacro/mapping files -- the
+  # original low/mid/high ones are untouched.
   echo "    ROii profile: ${ROII_PROFILE}"
+  if [ "${ROII_PROFILE}" = "roof" ]; then
+    CAL_SUFFIX="_roof"; XACRO_SUFFIX="_roof"
+  else
+    CAL_SUFFIX=""; XACRO_SUFFIX=""
+  fi
   SUDO docker cp "$REPO/config/sensor_mapping_roii_lidar_${ROII_PROFILE}.yaml" \
     autoware:/opt/autoware/share/autoware_carla_interface/config/sensor_mapping.yaml >/dev/null 2>&1
   SUDO docker cp "$REPO/container_patches/pointcloud_preprocessor_roii.launch.py" \
     autoware:/opt/autoware/share/carla_sensor_kit_launch/launch/pointcloud_preprocessor.launch.py >/dev/null 2>&1
-  SUDO docker cp "$REPO/container_patches/sensor_kit_calibration_roii.yaml" \
+  SUDO docker cp "$REPO/container_patches/sensor_kit_calibration_roii${CAL_SUFFIX}.yaml" \
     autoware:/opt/autoware/share/carla_sensor_kit_description/config/sensor_kit_calibration.yaml >/dev/null 2>&1
-  SUDO docker cp "$REPO/container_patches/sensor_kit_roii.xacro" \
+  SUDO docker cp "$REPO/container_patches/sensor_kit_roii${XACRO_SUFFIX}.xacro" \
     autoware:/opt/autoware/share/carla_sensor_kit_description/urdf/sensor_kit.xacro >/dev/null 2>&1
   SUDO docker cp "$REPO/container_patches/carla_wrapper.py" \
     autoware:/opt/autoware/lib/python3.10/site-packages/autoware_carla_interface/modules/carla_wrapper.py >/dev/null 2>&1
+  if [ "${ROII_PROFILE}" = "roof" ]; then
+    SUDO docker cp "$REPO/ros/roii_lidar_slicer.py" autoware:/root/roii_lidar_slicer.py >/dev/null 2>&1
+  fi
 elif [ "${LIDARS:-1}" = "4" ]; then
   SUDO docker cp "$REPO/config/sensor_mapping_roii_4lidar.yaml" \
     autoware:/opt/autoware/share/autoware_carla_interface/config/sensor_mapping.yaml >/dev/null 2>&1
@@ -351,12 +366,38 @@ for e2etry in 1 2 3; do
   if [ -n "${ROII_PROFILE:-}" ]; then
     # the fault injector FEEDS the concatenation (raw -> before_sync); the
     # health monitor watches the post-injector stream. Both precede the smoke.
-    SUDO docker exec autoware bash -c 'pkill -9 -f roii_lidar_fault_injector.py; pkill -9 -f roii_lidar_health_monitor.py; pkill -9 -f roii_gnss_fault_injector.py; exit 0' >/dev/null 2>&1
-    sleep 1   # let the kill settle so a smoke-retry doesn't double-start these
+    # roof profile: the slicer FEEDS the fault injector (roof raw -> 4 named
+    # raw topics) so it must ALSO start here, not only in the post-smoke
+    # dedupe block below -- the smoke test itself needs live lidar data to
+    # produce odometry, and the post-smoke block only runs AFTER a smoke
+    # PASS. Missing this the first time round made every attempt fail with
+    # "no odometry" (chicken-and-egg: no slicer -> no lidar data -> no NDT
+    # convergence -> smoke never passes -> slicer never starts).
+    SUDO docker exec autoware bash -c 'pkill -9 -f roii_lidar_fault_injector.py; pkill -9 -f roii_lidar_health_monitor.py; pkill -9 -f roii_gnss_fault_injector.py; pkill -9 -f roii_lidar_slicer.py; exit 0' >/dev/null 2>&1
+    # Verify the kill actually landed before respawning -- a fixed sleep isn't
+    # enough: a slicer orphaned by a PRIOR run.sh invocation's crash (it's a bare
+    # docker exec -d process, not part of the ros2 launch tree, so an e2e crash
+    # never reaps it) can survive right past a single pkill if sudo -S's stdin
+    # races across repeated SUDO() calls. Two live "roii_lidar_slicer" nodes with
+    # the identical name silently break publishing on ITS sliced output topics
+    # (root-caused 2026-07-09: /sensing/lidar/roof kept flowing at 10Hz from a
+    # single autoware_carla_interface publisher, but every /sensing/lidar/{front_g32,...}
+    # topic had zero messages until the duplicate was killed) with no exception,
+    # no error log -- just silent data loss. Poll until gone, re-kill if not.
+    for _i in 1 2 3 4 5; do
+      SUDO docker exec autoware bash -lc "pgrep -f roii_lidar_slicer.py" >/dev/null 2>&1 || break
+      SUDO docker exec autoware bash -c 'pkill -9 -f roii_lidar_slicer.py; exit 0' >/dev/null 2>&1
+      sleep 1
+    done
+    sleep 1   # let the other kills settle so a smoke-retry doesn't double-start these
               # (duplicated_node_checker flags dup names as a system ERROR)
     SUDO docker cp "$REPO/ros/roii_lidar_fault_injector.py" autoware:/root/roii_lidar_fault_injector.py >/dev/null 2>&1
     SUDO docker cp "$REPO/ros/roii_lidar_health_monitor.py" autoware:/root/roii_lidar_health_monitor.py >/dev/null 2>&1
     SUDO docker cp "$REPO/ros/roii_gnss_fault_injector.py" autoware:/root/roii_gnss_fault_injector.py >/dev/null 2>&1
+    if [ "${ROII_PROFILE}" = "roof" ]; then
+      SUDO docker cp "$REPO/ros/roii_lidar_slicer.py" autoware:/root/roii_lidar_slicer.py >/dev/null 2>&1
+      SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_slicer.py --ros-args -p use_sim_time:=true > /tmp/roii_slicer.log 2>&1"
+    fi
     SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_fault_injector.py --ros-args -p use_sim_time:=true > /tmp/roii_injector.log 2>&1"
     SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_health_monitor.py --ros-args -p use_sim_time:=true > /tmp/roii_monitor.log 2>&1"
     SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_gnss_fault_injector.py --ros-args -p use_sim_time:=true > /tmp/roii_gnss_injector.log 2>&1"
@@ -365,7 +406,13 @@ for e2etry in 1 2 3; do
     # the localization-convergence window starves NDT and makes the smoke fail
     # ("no odometry"). Launching it post-smoke keeps bring-up reliable.
   fi
-  sleep 30
+  # roof profile has one extra hop (roii_lidar_slicer.py, a pure-Python per-point
+  # azimuth filter) between the sensor and the fault_injector/concatenator that
+  # low/mid/high don't pay -- confirmed via a same-day control run (2026-07-09)
+  # that ROII_PROFILE=low converges in 1-2 attempts on this same 30s budget while
+  # roof missed "no odometry" on every attempt across 4 full 3-retry runs. Give
+  # roof extra margin here rather than shrinking the slicer's per-point loop.
+  if [ "${ROII_PROFILE:-}" = "roof" ]; then sleep 60; else sleep 30; fi
   # THE acceptance gate: can the stack actually produce a trajectory? Component
   # deaths can strike at any time (even on route arrival) and leave a deadlocked
   # respawn -- time-based checks miss them. Set a test route, demand a
@@ -396,15 +443,26 @@ if [ -n "${ROII_PROFILE:-}" ]; then
   # deployed unconditionally below regardless of ROII_PROFILE. Removed the file
   # and this dead deployment rather than fixing the wiring, to avoid running two
   # copies of the same mode-transition logic.
-  SUDO docker exec autoware bash -c 'pkill -9 -f "roii_lidar_health_monitor|roii_lidar_fault_injector|roii_gnss_fault_injector|roii_fault_detector"; exit 0' >/dev/null 2>&1
+  SUDO docker exec autoware bash -c 'pkill -9 -f "roii_lidar_health_monitor|roii_lidar_fault_injector|roii_gnss_fault_injector|roii_fault_detector|roii_lidar_slicer"; exit 0' >/dev/null 2>&1
+  for _i in 1 2 3 4 5; do
+    SUDO docker exec autoware bash -lc "pgrep -f roii_lidar_slicer.py" >/dev/null 2>&1 || break
+    SUDO docker exec autoware bash -c 'pkill -9 -f roii_lidar_slicer.py; exit 0' >/dev/null 2>&1
+    sleep 1
+  done
   sleep 3
   SUDO docker cp "$REPO/ros/roii_fault_detector.py"   autoware:/root/roii_fault_detector.py   >/dev/null 2>&1
+  if [ "${ROII_PROFILE}" = "roof" ]; then
+    # feeds the fault_injector (which expects the same 4 pointcloud_raw
+    # topics low/mid/high used to get directly from CARLA) -- must be up
+    # before/alongside it, order doesn't matter since ROS pub/sub is async.
+    SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_slicer.py --ros-args -p use_sim_time:=true > /tmp/roii_slicer.log 2>&1"
+  fi
   SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_fault_injector.py --ros-args -p use_sim_time:=true > /tmp/roii_injector.log 2>&1"
   SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_lidar_health_monitor.py --ros-args -p use_sim_time:=true > /tmp/roii_monitor.log 2>&1"
   SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_gnss_fault_injector.py --ros-args -p use_sim_time:=true > /tmp/roii_gnss_injector.log 2>&1"
   SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; python3 -u /root/roii_fault_detector.py --ros-args -p use_sim_time:=true > /tmp/roii_detector.log 2>&1"
   SUDO docker exec autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash; ros2 daemon stop >/dev/null 2>&1; ros2 daemon start >/dev/null 2>&1" >/dev/null 2>&1
-  echo "    ROii nodes: fault_injector + health_monitor + gnss_injector + fault_detector (+ watchdog/reconfig always-on)"
+  echo "    ROii nodes: fault_injector + health_monitor + gnss_injector + fault_detector (+ watchdog/reconfig always-on)$([ "${ROII_PROFILE}" = "roof" ] && echo ' + lidar_slicer')"
 fi
 
 echo "==> [5/5] Waiting for localization to converge..."
@@ -486,7 +544,7 @@ command -v adb >/dev/null && adb reverse tcp:8765 tcp:8765 >/dev/null 2>&1 || tr
 # modes (perception, concat) where planning competes for cores.
 if [ "${RVIZ:-1}" = "0" ]; then
   echo "    rviz skipped (RVIZ=0) -- use the tablet app for visualization"
-elif true; then
+else
 DISPLAY=$DISP XAUTHORITY=$XA xhost +local: >/dev/null 2>&1 || true
 if [ -n "${ROII_PROFILE:-}" ]; then
   SUDO docker cp "$REPO/rviz/roii_lidar_fault.rviz" autoware:/root/roii_lidar_fault.rviz >/dev/null 2>&1

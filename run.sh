@@ -14,7 +14,8 @@
 #   ./run.sh mapdaemon       # 태블릿 맵-전환 데몬 (탭으로 맵 바꾸려면 상시 실행)
 #   ./run.sh real            # 실제 지도 (CARLA 없이, planning simulator)
 #   ./run.sh test            # 전 타운 자율주행 검증 (~40분)
-#   ./run.sh roii low|mid|high [Town]   # ROii 4라이다 실험 모드 (장애감지·재구성)
+#   ./run.sh roii low|mid|high|roof [Town]   # ROii 4라이다 실험 모드 (장애감지·재구성)
+#                                             # roof: 코너 자가폐색(carla#9804) 회피, 지붕 1개+슬라이서
 #   ./run.sh soongsil                   # 숭실대 rosbag 이중측위 데모
 #   ./run.sh multimode [Town]           # 숭실대 멀티모드
 #   ./run.sh niro [Town]                # Niro 실차 구성(단일 Ouster OS2-128 + 이중측위) 주행
