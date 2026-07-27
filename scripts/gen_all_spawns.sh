@@ -5,6 +5,7 @@ set -u
 TOWNS=${1:-"Town03 Town05 Town06 Town07"}
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SUDO() { echo 1 | sudo -S "$@" 2>/dev/null; }
+CARLA_DIR="${CARLA_DIR:-/opt/carla-simulator/CarlaUE4/Binaries/Linux}"
 GS=$(pgrep -x gnome-shell | head -1)
 DISP=$(tr '\0' '\n' </proc/$GS/environ 2>/dev/null | grep '^DISPLAY=' | cut -d= -f2)
 XA=$(tr '\0' '\n' </proc/$GS/environ 2>/dev/null | grep '^XAUTHORITY=' | cut -d= -f2)
@@ -14,7 +15,7 @@ for TOWN in $TOWNS; do
   SUDO pkill -9 -f CarlaUE4-Linux-Shipping; sleep 4
   ok=0
   for attempt in 1 2 3; do
-    cd /opt/carla-simulator/CarlaUE4/Binaries/Linux
+    cd "$CARLA_DIR"
     setsid env DISPLAY="$DISP" XAUTHORITY="$XA" \
       ./CarlaUE4-Linux-Shipping "$TOWN" -RenderOffScreen -quality-level=Low \
       -nosound -carla-rpc-port=2000 </dev/null >/tmp/carla.log 2>&1 & disown

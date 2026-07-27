@@ -5,7 +5,7 @@
 set -u
 TOWN="${1:-Town01}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-CARLA_DIR=/opt/carla-simulator/CarlaUE4/Binaries/Linux
+CARLA_DIR="${CARLA_DIR:-/opt/carla-simulator/CarlaUE4/Binaries/Linux}"
 SUDO(){ echo 1 | sudo -S "$@"; }
 GS=$(pgrep -x gnome-shell|head -1)
 DISP=$(tr '\0' '\n' </proc/$GS/environ|grep '^DISPLAY='|cut -d= -f2); : "${DISP:=:1}"

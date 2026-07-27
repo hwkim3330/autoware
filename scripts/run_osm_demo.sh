@@ -14,7 +14,7 @@
 set -u
 SITE="${1:-soongsil}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-CARLA_DIR=/opt/carla-simulator/CarlaUE4/Binaries/Linux
+CARLA_DIR="${CARLA_DIR:-/opt/carla-simulator/CarlaUE4/Binaries/Linux}"
 BOOT_TOWN=Town01    # CARLA boots a light town; the interface then generates the
                     # OpenDRIVE world from <site>.xodr (patched carla_autoware.py).
 DISP="${DISP:-:1}"; XA="${XA:-/home/kim/.Xauthority}"
