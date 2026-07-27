@@ -73,9 +73,6 @@ def _parse_origin():
 MAP_ORIGIN = _parse_origin()
 MESH_DIR = "/opt/autoware/share/sample_vehicle_description/mesh"
 
-SENSOR_PARTS = {
-    "lidar": ["FrontLeftLidar", "FrontRightLidar", "FrontCenterLidar", "RearCenterLidar"],
-}
 # Full ROii sensor suite shown on the 3D model. Only the top LiDAR is physically
 # simulated in CARLA (load-minimal); the rest are MONITORED — their health is
 # derived from the live system liveness, no extra CARLA load. Camera OFF.
@@ -214,22 +211,6 @@ def load_traffic_lights(path):
                                sum(p[1] for p in ps) / len(ps),
                                max(p[2] for p in ps))
     return out
-
-
-def synth_tl_color(x, y, t):
-    """Synthetic traffic-light phase for a light at (x,y). AWSIM-Demo's Shinjuku scene
-    publishes an EMPTY signals topic (no live red/green), so we drive the REAL map lights
-    on a believable cycle: lights are clustered per ~38 m intersection cell and offset so
-    different junctions are out of phase. 22 s cycle: green 0-12, amber 12-14, red 14-22.
-    Returns 1=RED 2=AMBER 3=GREEN."""
-    cell = (round(x / 38.0), round(y / 38.0))
-    off = (abs(cell[0] * 73856093 ^ cell[1] * 19349663) % 22)
-    ph = (t + off) % 22
-    if ph < 12:
-        return 3
-    if ph < 14:
-        return 2
-    return 1
 
 
 class Bridge(Node):
@@ -1405,6 +1386,16 @@ class Bridge(Node):
         def fresh(k, age=2.0):
             v = s.get(k); return v and (now - v[1]) < age
 
+        def _json_field(k, age=3.0):
+            # JSON-in-std_msgs/String telemetry: a malformed payload must not
+            # kill the whole frame (producer would drop every tick it throws).
+            if not fresh(k, age):
+                return None
+            try:
+                return json.loads(s[k][0].data)
+            except Exception:
+                return None
+
         ndt_hz = (len(lt) - 1) / max(1e-3, (lt[-1] - lt[0])) if len(lt) >= 2 else 0.0
         lidar_ok = ndt_hz > 1.0
         ego = {"x": 0, "y": 0, "z": 0, "yawDeg": 0, "speedKmh": 0}
@@ -1608,12 +1599,13 @@ class Bridge(Node):
                       "routePath": (self.route_path if rstate in (2, 4) else [])},
             "vehicle": {"steerDeg": steer_deg, "turn": blink, "mrm": mrm,
                         "plannedKmh": planned_kmh},
-            "roii": (json.loads(s["roii_health"][0].data)
-                     if "roii_health" in s and fresh("roii_health", 3) else None),
+            "roii": _json_field("roii_health"),
             # 재구성 관리자: gateway 내장 계산 (injector status 기반)
             "reconfig": self._calc_reconfig(s, ndt_hz=ndt_hz, converged=converged,
                                             ntraj=ntraj, rstate=rstate, op_avail=op_avail),
-            "faultReport": None,
+            # fault detector 노드(/roii/fault_report)의 감지 결과 — 구독은 예전부터
+            # 있었지만 프레임에 실리지 않고 항상 None이었다.
+            "faultReport": _json_field("fault_report"),
             "objects": objects,
             "trafficLights": traffic_lights,
             "upcomingLight": upcoming_tl,
@@ -1658,11 +1650,12 @@ async def handler(ws):
                     print(f"[cmd] maxvel {data.get('kmh')}")
                 elif cmd == "map":
                     # map switch needs a full re-launch (host side). Write a
-                    # request file that scripts/map_switch_daemon.sh acts on.
-                    # The gateway runs INSIDE the container whose /tmp is NOT
-                    # shared with the host -- route the request through the
-                    # autoware_map bind mount (/root/autoware_map <-> host
-                    # /home/kim/autoware_map), which the daemon watches.
+                    # request file that scripts/map_switch_daemon.sh acts on:
+                    # the daemon polls container:/tmp/roii_map_request via
+                    # `docker exec` (the container's /tmp is not host-shared,
+                    # docker exec reads it anyway). The autoware_map bind-mount
+                    # copy is a best-effort fallback only -- the mount may be
+                    # read-only, and the current daemon does not watch it.
                     town = str(data.get("town", "Town04"))
                     # accept CARLA Towns AND real-map sites (pangyo_crd/pangyo_ngii/
                     # soongsil/kcity); the daemon routes real sites to planning_sim.
