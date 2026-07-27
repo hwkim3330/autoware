@@ -115,9 +115,18 @@ sensor_kit_base_link:
   # measured at both 45 and 90 deg), it only affects which local ray maps to
   # which labeled azimuth -- so this is a naming/semantics fix, coverage-
   # neutral by itself.
+  # LEFT/RIGHT were transposed here until 2026-07-27: this file feeds Autoware's
+  # TF, which is REP-103 (+y LEFT, yaw +90deg LEFT), but the values had been
+  # authored in CARLA's left-handed convention (+y right). "left_pandar" was
+  # therefore mounted on the vehicle's right and vice versa. Coverage is
+  # unaffected (the pair is symmetric) -- what broke was every per-sensor
+  # consumer: a fault injected into left_pandar killed the right side, and the
+  # tablet highlighted the mirrored sensor. y and yaw swapped between the two
+  # blocks below; nothing else changed. Same root cause fixed in
+  # ros/roii_lidar_slicer.py's SLICES for the roof profile.
   roii_left_pandar_base_link:
     x: 1.600
-    y: -1.050
+    y: 1.050
     z: 2.600  # raised again from 1.900 -- measured real angular coverage was
               # still only ~90-130deg out of the declared 220deg FOV (self-
               # occlusion by the cabin body, confirmed live on the CARLA
@@ -128,15 +137,15 @@ sensor_kit_base_link:
               # AV corner/side lidars sit at or above the greenhouse line.
     roll: 0.000
     pitch: 0.000
-    yaw: -1.570796  # -90 deg: pure LEFT side, facing left
+    yaw: 1.570796  # +90 deg: pure LEFT side, facing left (REP-103)
 
   roii_right_pandar_base_link:
     x: 1.600
-    y: 1.050
+    y: -1.050
     z: 2.600
     roll: 0.000
     pitch: 0.000
-    yaw: 1.570796  # +90 deg: pure RIGHT side, facing right. (Tested yaw=60
+    yaw: -1.570796  # -90 deg: pure RIGHT side, facing right. (Tested yaw=60
                    # as a diagnostic: the gap's start followed to ~60 but its
                    # end stayed fixed at ~115, widening the total gap from
                    # 25deg to 55deg -- confirms a real, mostly yaw-independent

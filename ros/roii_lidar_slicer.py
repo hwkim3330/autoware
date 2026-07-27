@@ -35,14 +35,27 @@ import sensor_msgs_py.point_cloud2 as pc2
 from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import Header
 
-# (center_deg, half_width_deg) -- matches each virtual sensor's mount yaw +
+# (center_deg, half_width_deg) -- each virtual sensor's mount yaw +
 # horizontal_fov/2 from sensor_mapping_roii_lidar_low.yaml (front/rear: 135deg
-# FOV around yaw 0/180; left/right pandar: 220deg FOV around yaw -90/+90).
+# FOV around yaw 0/180; left/right pandar: 220deg FOV around yaw +/-90).
+#
+# Azimuth is atan2(y, x) on the PUBLISHED cloud, which is already ROS/REP-103:
+# autoware_carla_interface does `lidar_data[:, 1] *= -1` (carla_ros.py) when it
+# converts from CARLA's left-handed frame, so +y is LEFT and +90deg is LEFT.
+# The centers below were originally taken straight from the corner-mount
+# calibration, which had been authored in CARLA's convention (+y right) -- so
+# left_pandar was slicing the RIGHT side of the car and vice versa. Nothing was
+# missing from the concatenated cloud (the pair is symmetric), but every
+# per-sensor consumer had the sides transposed: injecting a fault into
+# "left_pandar" blacked out the vehicle's right side and the tablet lit up the
+# wrong side of the car. All 4 virtual frames sit co-located on the roof with
+# yaw 0, so these azimuth centers are the ONLY thing assigning a physical
+# direction to a name -- there is no TF to cross-check them against.
 SLICES = {
     "front_g32": (0.0, 67.5),
     "rear_g32": (180.0, 67.5),
-    "left_pandar": (-90.0, 110.0),
-    "right_pandar": (90.0, 110.0),
+    "left_pandar": (90.0, 110.0),
+    "right_pandar": (-90.0, 110.0),
 }
 
 
