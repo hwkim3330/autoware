@@ -133,9 +133,14 @@ architecture viewer, v2 = 3D monitor with joystick/pedals teleop).
 
 ## Hardware / driver notes
 
-CARLA 0.9.x is UE4.26 — its Vulkan RHI hangs on NVIDIA driver 550+; use
-**driver 535**. CARLA boot is flaky (intermittent Signal 11) — the script
-retries until the RPC port stays up. After ~10 crash cycles the GPU driver
-state degrades: reboot to recover.
+CARLA 0.9.x is UE4.26. The old advice here was "its Vulkan RHI hangs on driver
+550+, pin **driver 535**" — that is **no longer true and the pin is dropped**.
+Verified 2026-07-27 on this box (RTX 3090, **driver 580.173.02**): CARLA 0.9.16
+`-RenderOffScreen -quality-level=Low` reaches the RPC port in under 10 s,
+Python API connects, 145 tick-FPS idle; a full `./run.sh Town04` bring-up
+booted CARLA on attempt 1 and drove Town04 end-to-end to the goal. Don't
+downgrade the driver for CARLA's sake.
 
-🤖 Integration assembled with Claude Code.
+CARLA boot is still flaky (intermittent Signal 11) — the script retries until
+the RPC port stays up. After ~10 crash cycles the GPU driver state degrades:
+reboot to recover.
