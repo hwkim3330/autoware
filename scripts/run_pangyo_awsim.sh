@@ -10,7 +10,7 @@
 # run_awsim.sh, whose sequence this follows.
 #
 # WHAT IS DIFFERENT FROM run_awsim.sh
-#   map      /root/autoware_map/pangyo_regen  (projector_type: local, not MGRS)
+#   map      /root/autoware_map/pangyo_regen  (MGRS 52SCG, re-authored by to_mgrs_frame.py)
 #   binary   /opt/awsim/AWSIM_pangyo/AWSIM_Pangyo.x86_64
 #   origin   37.4028153,127.1050297  (Pangyo / KETI)
 #   seed     computed from the lanelet the scene spawns the ego on, see [3.5]
@@ -35,11 +35,15 @@ AWSIM=/opt/awsim/AWSIM_pangyo
 MAP=/root/autoware_map/pangyo_regen
 FASTDDS="export ROS_DISCOVERY_SERVER=127.0.0.1:11811;"
 
-# Pangyo seed pose. Derived from the lanelet the scene builder spawns the ego on
-# (the best-connected lane); the ego sits 3.00 m off the nearest boundary node,
-# which is exactly the generator's lane half-width -- a useful check that the
-# scene and the map still agree.
-SX=-429.44; SY=556.48; SZ=9.88; QZ=-0.60273; QW=0.79795
+# Pangyo seed pose, in the map's MGRS 52SCG frame.
+#
+# to_mgrs_frame.py shifted the lanelet and cloud by (+32278.5, +41244.6) so the
+# coordinates sit inside the 100 km square and AWSIM's GNSS encoder stops
+# throwing. The scene spawns the ego near the map centre; converting that Unity
+# position back gives the values below, and the nearest lane boundary lands
+# exactly 3.00 m away -- the generator's lane half-width, which is the check that
+# the conversion is right.
+SX=32311.49; SY=41198.32; SZ=4.68; QZ=0.81781; QW=0.57549
 
 for f in "$HOST_SIM/AWSIM_Pangyo.x86_64" "$HOST_MAP/lanelet2_map.osm" "$HOST_MAP/pointcloud_map.pcd"; do
   [ -e "$f" ] || { echo "MISSING: $f"; exit 1; }
@@ -48,11 +52,18 @@ done
 echo "==> [0/5] container prep + copy simulator and map in"
 DK "command -v vulkaninfo >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq vulkan-tools mesa-vulkan-drivers libvulkan1; }"
 DK "mkdir -p $AWSIM $MAP"
-# Only re-copy when the build is newer; the player is 435 MB.
-if [ "$(DK "cat $AWSIM/.stamp 2>/dev/null")" != "$(stat -c %Y "$HOST_SIM/AWSIM_Pangyo.x86_64")" ]; then
-  echo "    copying player (435 MB) ..."
+# Re-copy when the build is newer. Stamp on _Data/level0, NOT on the .x86_64:
+# that file is a 15 KB launcher stub whose mtime does not move between builds, so
+# stamping it meant the container silently kept an old player. Cost hours -- the
+# ego was fixed on the host and still fell inside the container.
+BUILD_STAMP=$(stat -c %Y "$HOST_SIM/AWSIM_Pangyo_Data/level0" 2>/dev/null || echo 0)
+if [ "$(DK "cat $AWSIM/.stamp 2>/dev/null")" != "$BUILD_STAMP" ]; then
+  echo "    copying player ($(du -sh "$HOST_SIM" | cut -f1)) ..."
+  DK "rm -rf $AWSIM"; DK "mkdir -p $AWSIM"
   SUDO docker cp "$HOST_SIM/." autoware:$AWSIM/
-  DK "echo $(stat -c %Y "$HOST_SIM/AWSIM_Pangyo.x86_64") > $AWSIM/.stamp; chmod +x $AWSIM/AWSIM_Pangyo.x86_64"
+  DK "echo $BUILD_STAMP > $AWSIM/.stamp; chmod +x $AWSIM/AWSIM_Pangyo.x86_64"
+else
+  echo "    player already current"
 fi
 SUDO docker cp "$HOST_MAP/." autoware:$MAP/
 # Same duplicate-relay removal as the Shinjuku path: awsim_sensor_kit_launch's
@@ -74,7 +85,7 @@ DKD "unset AMENT_PREFIX_PATH ROS_DISTRO RMW_IMPLEMENTATION LD_LIBRARY_PATH PYTHO
      export DISPLAY=:1 XAUTHORITY=/root/.Xauthority VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json
      export ROS_DISCOVERY_SERVER=127.0.0.1:11811
      ulimit -n 65536
-     cd $AWSIM && ./AWSIM_Pangyo.x86_64 -force-vulkan -screen-width 1280 -screen-height 720 \
+     cd $AWSIM && ROS_DOMAIN_ID=0 ./AWSIM_Pangyo.x86_64 -force-vulkan -screen-width 1280 -screen-height 720 \
        > /tmp/awsim_pangyo.log 2>&1"
 sleep 10; DISPLAY=:1 wmctrl -a AWSIM 2>/dev/null; sleep 30
 echo "    GPU: $(nvidia-smi --query-compute-apps=process_name,used_memory --format=csv,noheader 2>/dev/null | grep -i pangyo || echo 'NOT RENDERING')"
