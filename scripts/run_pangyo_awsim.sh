@@ -123,6 +123,7 @@ sleep 14
 # -167.9 and -162.8 deg, seed 3 at 109.7). Doing it in two places just meant the
 # second call got "The route is already set".
 SUDO docker cp "$REPO/ros/drive_pangyo.py" autoware:/root/drive_pangyo.py >/dev/null 2>&1
+SUDO docker cp "$REPO/ros/watch_stop.py" autoware:/root/watch_stop.py >/dev/null 2>&1
 
 echo "==> [4/5] gateway (tablet feed, WS :8765)"
 DKD "$FASTDDS ulimit -n 65536
@@ -134,6 +135,12 @@ command -v adb >/dev/null && adb reverse tcp:8765 tcp:8765 >/dev/null 2>&1
 sleep 6
 
 echo "==> [4.5/5] route + engage autonomous"
+# Monitor first, so the drive is observed from before engage. It logs NDT against
+# AWSIM's noiseless GNSS, which is the only way to tell a localization drift from
+# a vehicle that has already left the road.
+DKD "$FASTDDS ulimit -n 65536; source /opt/autoware/setup.bash
+     python3 -u /root/watch_stop.py --watch 120 > /tmp/watch.log 2>&1"
+sleep 3
 DK "$FASTDDS . /opt/autoware/setup.bash; ulimit -n 65536
    python3 -u /root/drive_pangyo.py --seed $SX $SY 5.4 $SQZ $SQW --goal $GX $GY $GQZ $GQW --watch 40 2>&1" 2>&1 | sed 's/^/  /'
 

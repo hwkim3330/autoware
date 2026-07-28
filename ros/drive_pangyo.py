@@ -66,6 +66,8 @@ class Driver(Node):
         self.mode_cli = self.create_client(ChangeOperationMode,
                                            "/api/operation_mode/change_to_autonomous")
         self.clear_cli = self.create_client(ClearRoute, "/api/routing/clear_route")
+        self.stop_cli = self.create_client(ChangeOperationMode,
+                                          "/api/operation_mode/change_to_stop")
 
     def _odom(self, m):
         self.odom = m
@@ -138,6 +140,16 @@ def main():
 
     rclpy.init()
     d = Driver()
+
+    # Re-runnable from any state. Left engaged with a route, the second run's
+    # seed is refused with 'The vehicle is not stopped.' -- which is confusing,
+    # because the vehicle IS stationary; what the API objects to is the
+    # AUTONOMOUS operation mode, not the speed. So drop to stop and clear the
+    # route BEFORE seeding, not just before routing.
+    print("  [0] 정지 모드 + 기존 경로 해제")
+    d.call(d.stop_cli, ChangeOperationMode.Request(), "change_to_stop", wait=10.0)
+    d.call(d.clear_cli, ClearRoute.Request(), "clear_route", wait=10.0)
+    d.spin(3.0)
 
     sx, sy, sz, sqz, sqw = args.seed
     want = math.degrees(2 * math.atan2(sqz, sqw))
