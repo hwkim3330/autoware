@@ -85,6 +85,20 @@ SUDO docker cp "$HOST_MAP/." autoware:$MAP/
 # Same duplicate-relay removal as the Shinjuku path: awsim_sensor_kit_launch's
 # lidar.launch.xml publishes concatenated/pointcloud itself, racing cloud_relay.py.
 DK "sed -i '/<load_composable_node target=/,/<\\/load_composable_node>/d' /opt/autoware/share/awsim_sensor_kit_launch/launch/lidar.launch.xml"
+# More NDT iterations, but the convergence GATE stays at its default 2.0.
+#
+# Tried and reverted the same day: dropping
+# converged_param_nearest_voxel_transformation_likelihood to 1.0 to get past
+# "Score: 1.6767, Threshold: 2". It made things worse, not better -- NDT then
+# accepted a poor-but-converged solution and locked the heading ~63 deg off the
+# lane on all SIX seed attempts (172.9, -162.8, 176.2, 173.7, 173.5, 172.2 against
+# 109.7), so the vehicle never even got a route. The 2.0 gate was doing real work:
+# it was rejecting exactly those bad matches. See container_patches/
+# ndt_pangyo_notes.md.
+NDTP=/opt/autoware/share/autoware_launch/config/localization/ndt_scan_matcher/ndt_scan_matcher.param.yaml
+DK "sed -i 's/^      max_iterations: 30/      max_iterations: 50/' $NDTP
+    sed -i 's/^      converged_param_nearest_voxel_transformation_likelihood: 1.0/      converged_param_nearest_voxel_transformation_likelihood: 2.0/' $NDTP"
+
 SUDO docker update --cpuset-cpus="" autoware >/dev/null 2>&1
 
 echo "==> [1/5] clean reset (reap zombies + clear stale DDS/SHM)"

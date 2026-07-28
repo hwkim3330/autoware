@@ -27,10 +27,12 @@ import time
 import rclpy
 from autoware_adapi_v1_msgs.srv import (ChangeOperationMode, ClearRoute,
                                        InitializeLocalization, SetRoutePoints)
+from autoware_adapi_v1_msgs.msg import OperationModeState
 from geometry_msgs.msg import Pose, PoseWithCovariance, PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
-from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
+                        ReliabilityPolicy)
 
 # Tight enough that NDT does not walk away from it, loose enough that it can
 # still correct the metre or so of lateral offset the seed carries.
@@ -55,6 +57,13 @@ class Driver(Node):
     def __init__(self):
         super().__init__("drive_pangyo")
         self.odom = None
+        self.opmode = None
+        self.create_subscription(
+            OperationModeState, "/api/operation_mode/state",
+            lambda m: setattr(self, "opmode", m),
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                       history=HistoryPolicy.KEEP_LAST))
         self.create_subscription(
             Odometry, "/localization/kinematic_state", self._odom,
             QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
@@ -86,7 +95,7 @@ class Driver(Node):
         p = self.odom.pose.pose
         return p.position.x, p.position.y, p.position.z, yaw_of(p.orientation)
 
-    def call(self, cli, req, name, wait=25.0):
+    def call(self, cli, req, name, wait=60.0):
         if not cli.wait_for_service(timeout_sec=wait):
             print(f"    {name}: 서비스 없음")
             return None
@@ -96,7 +105,7 @@ class Driver(Node):
             rclpy.spin_once(self, timeout_sec=0.1)
         return fut.result()
 
-    def seed(self, x, y, z, qz, qw, want_yaw, tries=4):
+    def seed(self, x, y, z, qz, qw, want_yaw, tries=6, settle=12.0):
         """Seed, read back, retry. The read-back is the point."""
         req = InitializeLocalization.Request()
         pcs = PoseWithCovarianceStamped()
@@ -112,7 +121,10 @@ class Driver(Node):
         for attempt in range(1, tries + 1):
             r = self.call(self.init_cli, req, "initialize")
             ok = r is not None and r.status.success
-            self.spin(6.0)
+            # 6 s was not enough. NDT has been observed taking most of 18 s to
+            # settle onto a seeded heading; checking too early reads the
+            # transient and throws away a seed that would have converged.
+            self.spin(settle)
             got = self.pose()
             if got is None:
                 print(f"    시드 {attempt}: 응답={ok} 위치 수신 없음")
@@ -180,9 +192,30 @@ def main():
     if args.no_engage:
         return 0
 
-    print("  [3] 자율주행 engage")
-    r = d.call(d.mode_cli, ChangeOperationMode.Request(), "change_to_autonomous")
-    print(f"    응답: {getattr(getattr(r, 'status', None), 'success', '없음')}")
+    # Engage has to be RETRIED, not called once. Called ~2 s after routing it
+    # comes back success=False even though is_autonomous_mode_available was
+    # already true -- the planner has not published a trajectory yet. Measured on
+    # the shipped Shinjuku map (2026-07-28): one call right after routing failed
+    # and the vehicle sat still; the same call on its own a minute later returned
+    # success=True and the vehicle drove 76.7 m at up to 11 m/s. So the map was
+    # never the problem here -- the timing was.
+    print("  [3] 자율주행 engage (모드가 AUTONOMOUS 될 때까지 재시도)")
+    engaged = False
+    for attempt in range(1, 7):
+        r = d.call(d.mode_cli, ChangeOperationMode.Request(), "change_to_autonomous",
+                   wait=40.0)
+        ok = getattr(getattr(r, "status", None), "success", None)
+        msg = getattr(getattr(r, "status", None), "message", "")
+        d.spin(5.0)
+        mode = getattr(d.opmode, "mode", None)
+        avail = getattr(d.opmode, "is_autonomous_mode_available", None)
+        print(f"    engage {attempt}: success={ok} mode={mode} 자율가능={avail}"
+              + (f" '{msg}'" if msg else ""))
+        if mode == 2:
+            engaged = True
+            break
+    if not engaged:
+        print("    실패: AUTONOMOUS 모드로 전환되지 않음")
 
     print(f"  [4] {args.watch:.0f}초 주행 관찰")
     t0 = time.time()
