@@ -33,7 +33,17 @@ HOST_SIM=/home/kim/AWSIM_pangyo
 HOST_MAP=/home/kim/autoware_map/pangyo_regen
 AWSIM=/opt/awsim/AWSIM_pangyo
 MAP=/root/autoware_map/pangyo_regen
-FASTDDS="export ROS_DISCOVERY_SERVER=127.0.0.1:11811;"
+# AWSIM ships its own standalone FastDDS; the container has another. Put them on
+# a private domain with UDP-localhost transport instead of a discovery server.
+#
+# MEASURED 2026-07-28: with the discovery server, AWSIM initialised ROS2 cleanly
+# (log: "RMW: rmw_fastrtps_cpp", zero exceptions) and still published NOTHING --
+# `ros2 topic list` saw 2 topics under either RMW. Same binary, same scene, with
+# ROS_DOMAIN_ID=77 + ROS_LOCALHOST_ONLY=1: 26 topics, /clock at 98.9 Hz. The two
+# FastDDS builds could not complete discovery through the server; localhost UDP
+# also sidesteps the shared-memory segment incompatibility that produced
+# "Bad alloc deserializing ParticipantEntitiesInfo" earlier.
+FASTDDS="export ROS_DOMAIN_ID=77 ROS_LOCALHOST_ONLY=1; unset ROS_DISCOVERY_SERVER;"
 
 # Pangyo seed pose, in the map's MGRS 52SCG frame.
 #
@@ -43,7 +53,13 @@ FASTDDS="export ROS_DISCOVERY_SERVER=127.0.0.1:11811;"
 # position back gives the values below, and the nearest lane boundary lands
 # exactly 3.00 m away -- the generator's lane half-width, which is the check that
 # the conversion is right.
-SX=32311.49; SY=41198.32; SZ=4.68; QZ=0.81781; QW=0.57549
+SX=32311.49; SY=41198.32; SZ=4.68; SQZ=0.81781; SQW=0.57549
+#
+# Goal: 80% along the second lanelet of the successor chain out of the ego's lane
+# -- 687 m, two lanelets. Deliberately not the chain's END NODE: a goal sitting
+# exactly on a lanelet boundary is the one place lanelet matching has nothing to
+# match against.
+GX=31880.42; GY=41733.68; GQZ=0.83819; GQW=0.54538
 
 for f in "$HOST_SIM/AWSIM_Pangyo.x86_64" "$HOST_MAP/lanelet2_map.osm" "$HOST_MAP/pointcloud_map.pcd"; do
   [ -e "$f" ] || { echo "MISSING: $f"; exit 1; }
@@ -76,17 +92,13 @@ SUDO docker stop autoware >/dev/null
 SUDO bash -c 'rm -f /dev/shm/*fastrtps* /dev/shm/sem.*fastrtps* /dev/shm/*fastdds* 2>/dev/null; true'
 SUDO docker start autoware >/dev/null; sleep 8
 
-echo "==> [1.5/5] FastDDS discovery server (id 0 @ 127.0.0.1:11811)"
-DKD "source /opt/ros/humble/setup.bash; fastdds discovery -i 0 -l 127.0.0.1 -p 11811 > /tmp/dserver.log 2>&1"
-sleep 3
-
-echo "==> [2/5] launch AWSIM Pangyo (Vulkan, host X :1, discovery server)"
-DKD "unset AMENT_PREFIX_PATH ROS_DISTRO RMW_IMPLEMENTATION LD_LIBRARY_PATH PYTHONPATH
+echo "==> [2/5] launch AWSIM Pangyo (Vulkan, host X :1, domain 77 localhost)"
+DKD "unset AMENT_PREFIX_PATH ROS_DISTRO RMW_IMPLEMENTATION LD_LIBRARY_PATH PYTHONPATH ROS_DISCOVERY_SERVER
      export DISPLAY=:1 XAUTHORITY=/root/.Xauthority VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json
-     export ROS_DISCOVERY_SERVER=127.0.0.1:11811
+     export ROS_DOMAIN_ID=77 ROS_LOCALHOST_ONLY=1
      ulimit -n 65536
-     cd $AWSIM && ROS_DOMAIN_ID=0 ./AWSIM_Pangyo.x86_64 -force-vulkan -screen-width 1280 -screen-height 720 \
-       > /tmp/awsim_pangyo.log 2>&1"
+     cd $AWSIM && ./AWSIM_Pangyo.x86_64 -force-vulkan -screen-width 1280 -screen-height 720 \
+       -logfile /tmp/awsim_player.log > /tmp/awsim_pangyo.log 2>&1"
 sleep 10; DISPLAY=:1 wmctrl -a AWSIM 2>/dev/null; sleep 30
 echo "    GPU: $(nvidia-smi --query-compute-apps=process_name,used_memory --format=csv,noheader 2>/dev/null | grep -i pangyo || echo 'NOT RENDERING')"
 
@@ -104,14 +116,13 @@ DKD "$FASTDDS ulimit -n 65536; source /opt/autoware/setup.bash; python3 /opt/clo
 DKD "$FASTDDS ulimit -n 65536; source /opt/autoware/setup.bash; python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/percstub.log 2>&1"
 sleep 14
 
-echo "==> [3.5] seed localization at ($SX, $SY, $SZ)"
-DK "$FASTDDS . /opt/autoware/setup.bash; ulimit -n 65536
-   timeout 12 ros2 service call /api/localization/initialize autoware_adapi_v1_msgs/srv/InitializeLocalization \
-   '{pose: [{header: {frame_id: map}, pose: {pose: {position: {x: $SX, y: $SY, z: $SZ}, orientation: {z: $QZ, w: $QW}}, covariance: [1,0,0,0,0,0, 0,1,0,0,0,0, 0,0,0.01,0,0,0, 0,0,0,0.01,0,0, 0,0,0,0,0.01,0, 0,0,0,0,0,0.2]}}]}'" >/dev/null 2>&1
-DK "$FASTDDS . /opt/autoware/setup.bash; ulimit -n 65536
-   for i in 1 2 3 4 5; do ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
-   '{header: {frame_id: map}, pose: {pose: {position: {x: $SX, y: $SY, z: $SZ}, orientation: {z: $QZ, w: $QW}}, covariance: [1,0,0,0,0,0, 0,1,0,0,0,0, 0,0,0.01,0,0,0, 0,0,0,0.01,0,0, 0,0,0,0,0.01,0, 0,0,0,0,0,0.2]}}}' >/dev/null 2>&1; sleep 0.5; done"
-sleep 8
+# Seeding used to happen here, before the gateway. It now happens inside
+# [4.5] together with routing and engage: the seed has to be RE-VERIFIED right
+# before routing anyway, because NDT converges to a heading ~87 deg off the lane
+# on maybe two attempts in three (measured 2026-07-28 -- seeds 1 and 2 landed at
+# -167.9 and -162.8 deg, seed 3 at 109.7). Doing it in two places just meant the
+# second call got "The route is already set".
+SUDO docker cp "$REPO/ros/drive_pangyo.py" autoware:/root/drive_pangyo.py >/dev/null 2>&1
 
 echo "==> [4/5] gateway (tablet feed, WS :8765)"
 DKD "$FASTDDS ulimit -n 65536
@@ -121,6 +132,10 @@ DKD "$FASTDDS ulimit -n 65536
      python3 -u /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
 command -v adb >/dev/null && adb reverse tcp:8765 tcp:8765 >/dev/null 2>&1
 sleep 6
+
+echo "==> [4.5/5] route + engage autonomous"
+DK "$FASTDDS . /opt/autoware/setup.bash; ulimit -n 65536
+   python3 -u /root/drive_pangyo.py --seed $SX $SY 5.4 $SQZ $SQW --goal $GX $GY $GQZ $GQW --watch 40 2>&1" 2>&1 | sed 's/^/  /'
 
 echo "==> [5/5] status"
 DK "$FASTDDS . /opt/autoware/setup.bash
