@@ -319,8 +319,11 @@ for e2etry in 1 2 3; do
       PERC="true perception_mode:=lidar lidar_detection_model:=centerpoint"
     fi
   fi
+  # ROii calibration is REP-103; tell the CARLA spawn to mirror it (carla_wrapper.py).
+  REP103=0; [ -n "${ROII_PROFILE:-}" ] && REP103=1
   SUDO docker exec -d autoware bash -lc \
-    "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; source /opt/autoware/setup.bash && \
+    "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export CARLA_SENSOR_KIT_REP103=$REP103; \
+     source /opt/autoware/setup.bash && \
      ros2 launch autoware_launch e2e_simulator.launch.xml \
      map_path:=/root/autoware_map/$TOWN vehicle_model:=sample_vehicle \
      sensor_model:=carla_sensor_kit simulator_type:=carla carla_map:=$TOWN \

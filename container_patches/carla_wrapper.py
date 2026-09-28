@@ -17,6 +17,7 @@
 from __future__ import print_function
 
 import logging
+import os
 from queue import Queue
 
 import carla
@@ -263,10 +264,19 @@ class SensorWrapper(object):
         Returns:
             carla.Transform: Sensor transform
         """
-        location = carla.Location(x=spawn_point["x"], y=spawn_point["y"], z=spawn_point["z"])
-        rotation = carla.Rotation(
-            pitch=spawn_point["pitch"], roll=spawn_point["roll"], yaw=spawn_point["yaw"]
-        )
+        # The upstream loader hands us the calibration values untouched, assuming
+        # they are in CARLA's left-handed convention (+y right). The ROii
+        # calibration is REP-103 (+y left) because the SAME file also feeds
+        # Autoware's TF -- read literally, left_pandar spawned on the right side
+        # facing right while TF put it on the left facing left, so both side
+        # clouds landed rotated 180 deg about the car and NDT converged facing
+        # backwards (every route request then failed). CARLA_SENSOR_KIT_REP103=1
+        # (set by the ROii bring-up) mirrors y/pitch/yaw so spawn and TF agree.
+        y, pitch, yaw = spawn_point["y"], spawn_point["pitch"], spawn_point["yaw"]
+        if os.environ.get("CARLA_SENSOR_KIT_REP103") == "1":
+            y, pitch, yaw = -y, -pitch, -yaw
+        location = carla.Location(x=spawn_point["x"], y=y, z=spawn_point["z"])
+        rotation = carla.Rotation(pitch=pitch, roll=spawn_point["roll"], yaw=yaw)
         return carla.Transform(location, rotation)
 
     def cleanup(self):
