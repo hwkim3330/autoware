@@ -549,12 +549,17 @@ if [ "${RVIZ:-1}" = "0" ]; then
   echo "    rviz skipped (RVIZ=0) -- use the tablet app for visualization"
 else
 DISPLAY=$DISP XAUTHORITY=$XA xhost +local: >/dev/null 2>&1 || true
+# Hardware GLX from inside the container fails ("Unable to create a suitable
+# GLXContext ... BadValue") on this box; LIBGL_ALWAYS_SOFTWARE alone is not
+# enough because glvnd still picks the NVIDIA vendor from the X server, so force
+# Mesa too. LP_NUM_THREADS caps llvmpipe so rviz doesn't starve the stack.
+RVIZ_GL="__GLX_VENDOR_LIBRARY_NAME=mesa LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=4"
 if [ -n "${ROII_PROFILE:-}" ]; then
   SUDO docker cp "$REPO/rviz/roii_lidar_fault.rviz" autoware:/root/roii_lidar_fault.rviz >/dev/null 2>&1
-  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export DISPLAY=$DISP; export XAUTHORITY=/root/.Xauthority; source /opt/autoware/setup.bash; source /opt/roii_ws/install/setup.bash 2>/dev/null; rviz2 -d /root/roii_lidar_fault.rviz > /tmp/rviz.log 2>&1"
+  SUDO docker exec -d autoware bash -lc "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export $RVIZ_GL; export DISPLAY=$DISP; export XAUTHORITY=/root/.Xauthority; source /opt/autoware/setup.bash; source /opt/roii_ws/install/setup.bash 2>/dev/null; rviz2 -d /root/roii_lidar_fault.rviz > /tmp/rviz.log 2>&1"
 else
   SUDO docker exec -d autoware bash -lc \
-  "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export DISPLAY=$DISP; export XAUTHORITY=/root/.Xauthority; \
+  "export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/udp.xml; export $RVIZ_GL; export DISPLAY=$DISP; export XAUTHORITY=/root/.Xauthority; \
    source /opt/autoware/setup.bash; \
    rviz2 -d /root/autoware_no_camera.rviz > /tmp/rviz.log 2>&1"
 fi
