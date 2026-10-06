@@ -271,9 +271,10 @@ DK "echo 'relay: '\$(grep relayed /tmp/relay.log 2>/dev/null|tail -1)
 # Bring-up self-check. Under the launch burst a composable node occasionally fails to load
 # (seen: planning_validator's load_node timed out -> no /planning/trajectory -> every engage
 # ends in "availability timeout"). A clean relaunch has always cleared it, so do that once.
-# (The Velodyne hardware driver always fails to load here -- AWSIM publishes the cloud itself
-# -- so it is excluded.)
-BAD=$(DK "grep -E 'load_node \\(timeout\\)|Failed to load node|process has died' /tmp/awsim_aw.log | grep -vc velodyne" | tr -dc 0-9)
+# (Excluded, both always fail here and neither is on the driving path: the Velodyne hardware
+# driver -- AWSIM publishes the cloud itself -- and pose_instability_detector, a diagnostic
+# that aborts at start-up on this image under CARLA as well.)
+BAD=$(DK "grep -E 'load_node \\(timeout\\)|Failed to load node|process has died' /tmp/awsim_aw.log | grep -vcE 'velodyne|pose_instability_detector'" | tr -dc 0-9)
 if [ "${BAD:-0}" != "0" ]; then
   if [ -z "${AWSIM_RETRY:-}" ]; then
     echo "==> self-check: $BAD failed node load(s)/deaths in Autoware -- relaunching once"
