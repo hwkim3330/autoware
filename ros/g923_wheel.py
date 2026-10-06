@@ -95,8 +95,8 @@ class Wheel:
     # on both jerked the wheel. The reference now chases the target through a
     # first-order lag with a slew limit, velocity is low-passed, and errors inside
     # DEADBAND_DEG produce no force.
-    REF_TAU_S = 0.4
-    SLEW_DEG_S = 120.0
+    REF_TAU_S = 0.12   # targets now arrive at 20 Hz; 0.4 s made the wheel trail the car
+    SLEW_DEG_S = 200.0
     VEL_ALPHA = 0.15
     DEADBAND_DEG = 1.5
 

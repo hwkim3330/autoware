@@ -65,6 +65,7 @@ class Demo:
         self.steer_deg_vehicle = 0.0
         self.op = "?"
         self.speed_ms = 0.0
+        self.steer_cmd_deg, self.steer_cmd_t = 0.0, 0.0
         self.w.target = None
         self.w.autocenter(True)
 
@@ -153,6 +154,19 @@ class Demo:
                         d = json.loads(msg)
                         if d.get("type") == "lanes":
                             continue
+                        if d.get("type") == "steer":
+                            # 20 Hz commanded tire angle: leads the measured steering, so
+                            # the wheel turns with the car instead of after it.
+                            deg = d.get("cmdDeg")
+                            if deg is None:
+                                deg = d.get("actDeg")
+                            if deg is not None:
+                                self.steer_cmd_deg = float(deg)
+                                self.steer_cmd_t = time.monotonic()
+                                if self.mode == "AUTONOMOUS":
+                                    wd = self.steer_cmd_deg * STEER_RATIO
+                                    self.w.target = max(-MAX_WHEEL_DEG, min(MAX_WHEEL_DEG, wd))
+                            continue
                         om = d.get("operationMode") or {}
                         op = om.get("mode") if isinstance(om, dict) else om
                         if op != self.op:
@@ -163,7 +177,8 @@ class Demo:
                         self.speed_ms = float((d.get("ego") or {}).get("speedKmh") or 0.0) / 3.6
                         veh = d.get("vehicle") or {}
                         self.steer_deg_vehicle = float(veh.get("steerDeg") or 0.0)
-                        if self.mode == "AUTONOMOUS":
+                        # fall back to the 2 Hz measured angle only if the steer stream is absent
+                        if self.mode == "AUTONOMOUS" and time.monotonic() - self.steer_cmd_t > 1.0:
                             wd = self.steer_deg_vehicle * STEER_RATIO
                             self.w.target = max(-MAX_WHEEL_DEG, min(MAX_WHEEL_DEG, wd))
             except Exception as ex:

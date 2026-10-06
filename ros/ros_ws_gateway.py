@@ -25,7 +25,7 @@ from collections import deque
 import rclpy
 from rclpy.node import Node
 from rclpy.clock import Clock, ClockType
-from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, HistoryPolicy, qos_profile_sensor_data
 from rclpy.parameter import Parameter
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -447,6 +447,10 @@ class Bridge(Node):
         cmd_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                              reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST)
         self.pub_ctrl = self.create_publisher(Control, "/external/selected/control_cmd", cmd_qos)
+        # Commanded tire angle (what the controller asks for, ahead of the measured
+        # steering_status) for the 20 Hz steer stream -- the wheel follows this.
+        self.create_subscription(Control, "/control/command/control_cmd",
+                                 lambda m: self._set("ctrlcmd", m), qos_profile_sensor_data)
         self.pub_gate = self.create_publisher(GateMode, "/control/gate_mode_cmd", 1)
         self.pub_gear = self.create_publisher(GearCommand, "/external/selected/gear_cmd", cmd_qos)
         from autoware_vehicle_msgs.msg import Engage as _Engage
@@ -1796,6 +1800,30 @@ async def handler(ws):
         print(f"[-] app disconnected ({len(CLIENTS)})")
 
 
+def steer_frame():
+    """Small message for the wheel: commanded and measured tire angle (deg, + = left)."""
+    s = BRIDGE.s
+    cmd = s.get("ctrlcmd"); act = s.get("steer"); op = s.get("op")
+    return json.dumps({
+        "type": "steer",
+        "cmdDeg": round(math.degrees(cmd[0].lateral.steering_tire_angle), 2) if cmd else None,
+        "actDeg": round(math.degrees(act[0].steering_tire_angle), 2) if act else None,
+        "op": OP_MODE.get(op[0].mode, "UNKNOWN") if op else "UNKNOWN",
+    })
+
+
+async def steer_producer():
+    # 20 Hz: the 2 Hz state frame made the wheel trail the car by up to half a second.
+    while True:
+        try:
+            if CLIENTS and BRIDGE:
+                msg = steer_frame()
+                await asyncio.gather(*[c.send(msg) for c in list(CLIENTS)], return_exceptions=True)
+        except Exception as e:
+            print("steer tick error:", e)
+        await asyncio.sleep(0.05)
+
+
 async def producer():
     while True:
         try:
@@ -1844,7 +1872,7 @@ async def main():
     # (prevents ESTAB pile-up); close_timeout bounds shutdown of dropped clients.
     async with websockets.serve(handler, WS_HOST, WS_PORT,
                                 ping_interval=20, ping_timeout=20, close_timeout=5):
-        await asyncio.gather(producer(), camera_producer())
+        await asyncio.gather(producer(), camera_producer(), steer_producer())
 
 
 if __name__ == "__main__":
