@@ -117,6 +117,10 @@ DK "sed -i -E 's/(enable_back:) *true/\1 false/; s/(enable_freespace_planner:) *
 # short of it and never reached it -- the same deadlock at (81688, 50129) on every soak trip
 # (velocity factor 'sidewalk', APPROACHING 19.7 m). With no perception it protects nobody.
 DK "sed -i '/name: launch_walkway_module/{n;s/\"true\"/\"false\"/}' /opt/autoware/share/autoware_launch/config/planning/preset/default_preset.yaml"
+# boundary_departure_prevention off: on Shinjuku's tight turns it logged "critical departure"
+# and motion_velocity_planner zeroed the trajectory 3 m ahead while behavior_path still said
+# go -- the soak stalls at (81716, 50053) and (81688, 50130), every trip, at the same corners.
+DK "sed -i '/name: launch_boundary_departure_prevention_module/{n;s/\"true\"/\"false\"/}' /opt/autoware/share/autoware_launch/config/planning/preset/default_preset.yaml"
 # DDS transport: default SHM+UDP (shared host /dev/shm via --ipc=host) is what works for
 # data flow + localization. (Tried: isolated /dev/shm -> no data flow; UDP-only profile ->
 # "Not enough memory in the buffer stream" on node init + preprocessing breaks.) Known
