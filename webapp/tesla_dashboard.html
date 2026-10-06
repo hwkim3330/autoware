@@ -132,14 +132,30 @@ function updatePanel(d) {
 
 // ---------- map (heading-up, ego near the bottom third) ----------
 const cv = document.getElementById('map'), cx = cv.getContext('2d');
-function resize() { const r = cv.getBoundingClientRect(), k = devicePixelRatio || 1;
+// Render at 1x even on a 4K/HiDPI screen: at devicePixelRatio 2 the full-window canvas
+// was 4x the pixels and every frame redrew every lane in the map -- the dashboard crawled.
+function resize() { const r = cv.getBoundingClientRect(), k = 1;
   cv.width = r.width * k; cv.height = r.height * k; cx.setTransform(k, 0, 0, k, 0, 0); }
 addEventListener('resize', resize); resize();
 
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const COL = { bg: css('--bg'), road: css('--road'), lane: css('--lane'), route: css('--route'), ink: css('--ink') };
+// Only lanes near the car are drawn; the subset is refreshed twice a second, not per frame.
+let nearPolys = [];
+setInterval(() => {
+  if (!S.ego) return;
+  const R = 260, ex = S.ego.x, ey = S.ego.y;
+  nearPolys = S.polys.filter(pl => pl.some(p => Math.abs(p[0] - ex) < R && Math.abs(p[1] - ey) < R));
+}, 500);
+
 let zoom = 4.0; // px per metre, eased with speed
-function draw() {
+let lastDraw = 0;
+function draw(t) {
+  requestAnimationFrame(draw);
+  if (t - lastDraw < 33) return;          // ~30 fps is plenty for a map
+  lastDraw = t;
   const W = cv.clientWidth, H = cv.clientHeight;
-  cx.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg'); cx.fillRect(0, 0, W, H);
+  cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
   if (S.ego) {
     const target = (H / 760) * (9.0 - Math.min(lastSpeed, 60) / 60 * 4.5);   // window-relative, zoom out with speed
     zoom += (target - zoom) * 0.05;
@@ -149,22 +165,20 @@ function draw() {
     cx.scale(zoom, -zoom);              // world y up
     cx.rotate(-(yaw - Math.PI / 2));    // heading up
     cx.translate(-S.ego.x, -S.ego.y);
-    const R = (Math.max(W, H) / zoom) * 1.2;
-    const near = p => Math.abs(p[0] - S.ego.x) < R && Math.abs(p[1] - S.ego.y) < R;
     // road surface: thick strokes along lane polylines, then thin lane lines
     const stroke = (lw, col) => {
       cx.strokeStyle = col; cx.lineWidth = lw; cx.lineCap = 'round'; cx.lineJoin = 'round';
-      for (const pl of S.polys) { if (!pl.length || !pl.some(near)) continue;
+      for (const pl of nearPolys) { if (!pl.length) continue;
         cx.beginPath(); cx.moveTo(pl[0][0], pl[0][1]); for (const p of pl) cx.lineTo(p[0], p[1]); cx.stroke(); }
     };
-    stroke(3.6, getComputedStyle(document.body).getPropertyValue('--road'));
+    stroke(3.6, COL.road);
     cx.setLineDash([1.5, 2.5]);
-    stroke(0.15, getComputedStyle(document.body).getPropertyValue('--lane'));
+    stroke(0.15, COL.lane);
     cx.setLineDash([]);
     const path = (pts, lw, col, alpha) => { if (pts.length < 2) return;
       cx.globalAlpha = alpha; cx.strokeStyle = col; cx.lineWidth = lw; cx.beginPath();
       cx.moveTo(pts[0][0], pts[0][1]); for (const p of pts) cx.lineTo(p[0], p[1]); cx.stroke(); cx.globalAlpha = 1; };
-    const routeCol = getComputedStyle(document.body).getPropertyValue('--route');
+    const routeCol = COL.route;
     path(S.route, 1.6, routeCol, 0.35);
     path(S.traj, 1.1, routeCol, 0.9);
     // ego car
@@ -174,12 +188,11 @@ function draw() {
     cx.fillStyle = '#fff'; roundRect(0.6, -0.75, 1.2, 1.5, 0.3); cx.fill();
     cx.restore();
   }
-  requestAnimationFrame(draw);
 }
 function roundRect(x, y, w, h, r) { cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r);
   cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
 
-connect(); draw();
+connect(); requestAnimationFrame(draw);
 </script>
 </body>
 </html>
