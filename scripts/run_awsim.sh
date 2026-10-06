@@ -216,7 +216,11 @@ DK "for p in \$(pgrep -f AWSIM-Demo); do taskset -cp 0,1,8,9 \$p >/dev/null 2>&1
 # planner generates a trajectory without the full perception stack.
 echo "==> [3.4] relay (before_sync->concatenated) + perception_stub (clear road)"
 DKD "$FASTDDS ulimit -n 65536; source /opt/autoware/setup.bash; python3 /opt/cloud_relay.py > /tmp/relay.log 2>&1"
-DKD "$FASTDDS ulimit -n 65536; source /opt/autoware/setup.bash; python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/percstub.log 2>&1"
+DKD "$FASTDDS ulimit -n 65536; export STUB_EMPTY_TRAFFIC_LIGHTS=0; source /opt/autoware/setup.bash; python3 -u /root/perception_stub.py --ros-args -p use_sim_time:=true > /tmp/percstub.log 2>&1"
+# All traffic lights GREEN (perception is off, AWSIM-Demo exposes no V2I topic): without it the
+# traffic-light module reads UNKNOWN and the car holds at the first stop line for good.
+SUDO docker cp "$REPO/ros/traffic_light_all_green.py" autoware:/root/traffic_light_all_green.py 2>/dev/null
+DKD "$FASTDDS source /opt/autoware/setup.bash; python3 -u /root/traffic_light_all_green.py $MAP/lanelet2_map.osm > /tmp/tl_green.log 2>&1"
 sleep 14   # let NDT start matching off the relayed concatenated cloud before seeding
 
 echo "==> [3.5] seed localization (Shinjuku x81378 y49917 yaw34) - service often hangs on SHM,"
