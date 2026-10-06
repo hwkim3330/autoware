@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ROii Drive</title>
+<style>
+  :root {
+    --bg: #f2f3f6; --panel: #ffffff; --card: #ffffff; --ink: #111317; --ink2: #3a3f48; --muted: #8e939c;
+    --hair: rgba(17,19,23,.08); --ap: #3d6be8; --green: #2bb36a; --amber: #f2a51e; --red: #e5483f;
+    --shadow: 0 1px 2px rgba(0,0,0,.04), 0 10px 30px rgba(17,19,23,.07);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0d0f12; --panel: #15181d; --card: #181c22; --ink: #f3f5f8; --ink2: #c9ced6; --muted: #858c97;
+      --hair: rgba(255,255,255,.08); --ap: #5a86f3; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35); }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Pretendard", "Noto Sans KR", "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 44px 28px 60px; }
+  header { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 30px; }
+  h1 { font-size: 40px; font-weight: 700; letter-spacing: -1.2px; margin: 0; }
+  .tag { color: var(--muted); font-size: 15px; margin: 0 0 6px; }
+  .actions { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+  button { border: 0; border-radius: 13px; padding: 12px 18px; font: 600 14.5px/1 inherit; cursor: pointer;
+    background: var(--card); color: var(--ink); box-shadow: var(--shadow); transition: transform .08s, opacity .15s; }
+  button:active { transform: scale(.97); }
+  button.primary { background: var(--ap); color: #fff; }
+  button:disabled { opacity: .4; cursor: default; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 18px; }
+  .sc { background: var(--card); border-radius: 22px; box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column;
+    border: 2px solid transparent; transition: border-color .2s, transform .15s; }
+  .sc.active { border-color: var(--ap); }
+  .sc:hover { transform: translateY(-2px); }
+  .art { height: 140px; position: relative; }
+  .art svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .body { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .title { font-size: 20px; font-weight: 650; letter-spacing: -.3px; }
+  .sub { font-size: 13px; color: var(--muted); }
+  .sc .go { margin-top: 14px; width: 100%; }
+  .sc.soon { opacity: .6; }
+  .status { margin-top: 26px; background: var(--card); border-radius: 22px; box-shadow: var(--shadow); padding: 20px 22px;
+    display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 18px; align-items: center; }
+  .k { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .v { font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .pill { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .bar { height: 5px; border-radius: 3px; background: var(--hair); margin-top: 10px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--ap); transition: width 1s linear; }
+  .switch { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 15px; font-weight: 600; }
+  .switch .tr { width: 46px; height: 28px; border-radius: 14px; background: var(--hair); position: relative; transition: background .2s; }
+  .switch .tr i { position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left .2s; }
+  .switch.on .tr { background: var(--green); } .switch.on .tr i { left: 21px; }
+  details { margin-top: 18px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  pre { background: var(--card); border-radius: 16px; padding: 14px 16px; font-size: 11.5px; line-height: 1.45; max-height: 260px;
+    overflow: auto; white-space: pre-wrap; color: var(--ink2); box-shadow: var(--shadow); }
+  .toast { position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 20px); opacity: 0; transition: all .25s;
+    background: var(--ink); color: var(--bg); border-radius: 14px; padding: 11px 18px; font-size: 14px; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  @media (max-width: 760px) { .status { grid-template-columns: 1fr 1fr; } header { flex-wrap: wrap; } .actions { margin-left: 0; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div><p class="tag">KETI · Autoware 시뮬레이션</p><h1>ROii Drive</h1></div>
+    <div class="actions">
+      <label class="switch" id="wheel"><span class="tr"><i></i></span>G923 핸들</label>
+      <button id="dash" class="primary" disabled>대시보드 열기</button>
+      <button id="stop">모두 종료</button>
+    </div>
+  </header>
+  <div class="grid" id="grid"></div>
+  <div class="status">
+    <div><div class="k">상태</div><div class="v"><span class="pill" id="pill"></span><span id="phase">대기 중</span></div>
+      <div class="bar"><i id="bar"></i></div></div>
+    <div><div class="k">게이트웨이</div><div class="v" id="gw">—</div></div>
+    <div><div class="k">CPU 부하</div><div class="v" id="load">—</div></div>
+    <div><div class="k">GPU 메모리</div><div class="v" id="gpu">—</div></div>
+  </div>
+  <details id="logbox"><summary>기동 로그</summary><pre id="log"></pre></details>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const $ = id => document.getElementById(id);
+// small line illustrations per scenario (no external assets)
+const ART = {
+  shinjuku: (c) => `<svg viewBox="0 0 300 140" preserveAspectRatio="xMidYMid slice"><rect width="300" height="140" fill="${c}1a"/>
+    ${[20,52,84,150,182,214,246].map((x,i)=>`<rect x="${x}" y="${30+(i*17)%40}" width="26" height="${110-(i*17)%40}" fill="${c}" opacity="${.18+i%3*.08}"/>`).join('')}
+    <path d="M0 125 L300 125" stroke="${c}" stroke-width="3" opacity=".5"/><path d="M110 140 L150 90 L190 140" fill="none" stroke="${c}" stroke-width="3" stroke-dasharray="8 7"/></svg>`,
+  pangyo: (c) => `<svg viewBox="0 0 300 140" preserveAspectRatio="xMidYMid slice"><rect width="300" height="140" fill="${c}1a"/>
+    <path d="M0 110 Q80 70 150 95 T300 80 L300 140 L0 140Z" fill="${c}" opacity=".18"/>
+    ${[40,95,160,220].map((x,i)=>`<rect x="${x}" y="${45+i*9}" width="34" height="${80-i*9}" rx="3" fill="${c}" opacity=".3"/>`).join('')}
+    <circle cx="250" cy="34" r="12" fill="${c}" opacity=".35"/></svg>`,
+  carla_roii: (c) => `<svg viewBox="0 0 300 140" preserveAspectRatio="xMidYMid slice"><rect width="300" height="140" fill="${c}1a"/>
+    <rect x="115" y="55" width="70" height="32" rx="12" fill="${c}" opacity=".45"/>
+    ${[0,1,2,3].map(k=>{const a=k*Math.PI/2+.4;return `<path d="M150 71 L${150+Math.cos(a)*120} ${71+Math.sin(a)*90}" stroke="${c}" stroke-width="1.5" opacity=".35"/>`}).join('')}
+    <circle cx="150" cy="71" r="52" fill="none" stroke="${c}" stroke-dasharray="4 6" opacity=".45"/></svg>`,
+  race: (c) => `<svg viewBox="0 0 300 140" preserveAspectRatio="xMidYMid slice"><rect width="300" height="140" fill="${c}1a"/>
+    <path d="M60 100 C20 100 20 40 70 40 L220 40 C285 40 285 100 230 100 Z" fill="none" stroke="${c}" stroke-width="10" opacity=".35"/>
+    <path d="M60 100 C20 100 20 40 70 40 L220 40 C285 40 285 100 230 100 Z" fill="none" stroke="#fff" stroke-width="1.5" stroke-dasharray="6 8" opacity=".8"/></svg>`,
+};
+const COLORS = { shinjuku: '#3d6be8', pangyo: '#2bb36a', carla_roii: '#8a5cf6', race: '#e5483f' };
+let S = null;
+function toast(t) { const e = $('toast'); e.textContent = t; e.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove('show'), 2600); }
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+  return r.json();
+}
+function render() {
+  if (!S) return;
+  if (!$('grid').children.length) {
+    $('grid').innerHTML = S.scenarios.map(s => `
+      <div class="sc ${s.ready ? '' : 'soon'}" data-id="${s.id}">
+        <div class="art">${(ART[s.id] || ART.race)(COLORS[s.id] || '#3d6be8')}</div>
+        <div class="body"><div class="title">${s.title}</div><div class="sub">${s.sub}</div>
+          <button class="go ${s.ready ? 'primary' : ''}" ${s.ready ? '' : 'disabled'}>${s.ready ? '시작' : '준비 중'}</button></div>
+      </div>`).join('');
+    document.querySelectorAll('.sc').forEach(el => el.querySelector('.go').onclick = async () => {
+      const r = await api('/api/start', { id: el.dataset.id }); toast(r.msg); poll(); });
+  }
+  document.querySelectorAll('.sc').forEach(el => el.classList.toggle('active', el.dataset.id === S.scenario));
+  const label = { idle: '대기 중', booting: `${S.title} 기동 중`, ready: `${S.title} 주행 가능`, failed: `${S.title} 기동 실패` }[S.phase];
+  $('phase').textContent = label;
+  $('pill').style.background = { idle: 'var(--muted)', booting: 'var(--amber)', ready: 'var(--green)', failed: 'var(--red)' }[S.phase];
+  const pct = S.phase === 'ready' ? 100 : S.phase === 'booting' && S.bootS ? Math.min(96, 100 * S.elapsed / S.bootS) : 0;
+  $('bar').style.width = pct + '%';
+  $('gw').innerHTML = `<span class="pill" style="background:${S.gateway ? 'var(--green)' : 'var(--muted)'}"></span>${S.gateway ? '연결됨' : '없음'}`;
+  $('load').textContent = `${S.load.toFixed(1)} / ${S.cpus}`;
+  $('gpu').textContent = S.gpu ? `${(S.gpu.usedMB / 1024).toFixed(1)} / ${(S.gpu.totalMB / 1024).toFixed(0)} GB` : '—';
+  $('wheel').classList.toggle('on', S.wheel);
+  $('dash').disabled = !S.gateway;
+}
+async function poll() {
+  try { S = await api('/api/status'); render(); } catch {}
+  if ($('logbox').open && S && S.scenario) { const r = await api('/api/log?name=' + S.scenario); $('log').textContent = r.text; $('log').scrollTop = 1e9; }
+}
+$('wheel').onclick = async () => { await api('/api/wheel', { on: !(S && S.wheel) }); toast(S && S.wheel ? '핸들 연동 끔' : '핸들 연동 켬'); poll(); };
+$('stop').onclick = async () => { const r = await api('/api/stop', {}); toast(r.msg); poll(); };
+$('dash').onclick = () => window.open('/dashboard', 'roii-dashboard');
+poll(); setInterval(poll, 2000);
+</script>
+</body>
+</html>
