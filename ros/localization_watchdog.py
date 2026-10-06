@@ -5,8 +5,9 @@ Seen on AWSIM Shinjuku (2026-10-06): after fast manual driving the NDT pose ran
 230+ m away from GNSS while still reporting `converged`, and the dashboard,
 routing and autonomy all followed the wrong pose. In simulation the GNSS pose is
 reliable, so when the fused pose and GNSS disagree by more than GAP_M for
-HOLD_S, this calls /api/localization/initialize with the GNSS position and the
-heading of recent GNSS motion (or the last fused heading when standing still).
+HOLD_S, this asks /api/localization/initialize to start over from GNSS (empty
+pose list: GNSS position + NDT's own heading search), at most MAX_TRIES times in
+a row before leaving recovery to Reset.
 
 Run inside the container:
     python3 localization_watchdog.py --ros-args -p use_sim_time:=true
@@ -24,6 +25,7 @@ from autoware_adapi_v1_msgs.srv import InitializeLocalization
 GAP_M = 15.0
 HOLD_S = 3.0
 COOLDOWN_S = 20.0
+MAX_TRIES = 2         # consecutive failed reinits before giving up (Reset takes over)
 
 
 class Watchdog(Node):
@@ -33,6 +35,7 @@ class Watchdog(Node):
         self.gnss = []          # (t, x, y, z)
         self.bad_since = None
         self.last_fix = 0.0
+        self.tries, self.gave_up = 0, False
         self.create_subscription(Odometry, "/localization/kinematic_state",
                                  lambda m: setattr(self, "odom", m), qos_profile_sensor_data)
         self.create_subscription(PoseWithCovarianceStamped, "/sensing/gnss/pose_with_covariance",
@@ -57,45 +60,37 @@ class Watchdog(Node):
         gap = math.hypot(o.x - gx, o.y - gy)
         if gap < GAP_M:
             self.bad_since = None
+            if now - self.last_fix > COOLDOWN_S:     # held after a reinit: reset the budget
+                self.tries, self.gave_up = 0, False
             return
         self.bad_since = self.bad_since or now
         if now - self.bad_since < HOLD_S or now - self.last_fix < COOLDOWN_S:
             return
-        yaw = self._gnss_heading()
-        if yaw is None:
-            q = self.odom.pose.pose.orientation
-            yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
-        self._reinit(gx, gy, gz, yaw, gap)
+        if self.tries >= MAX_TRIES:
+            if not self.gave_up:
+                self.get_logger().error(f"{self.tries} reinits did not hold -- giving up; use Reset")
+                self.gave_up = True
+            return
+        self._reinit(gap)
+        self.tries += 1
         self.last_fix, self.bad_since = now, None
 
-    def _gnss_heading(self):
-        # heading from the GNSS track over the last few samples, if the car moved enough
-        if len(self.gnss) < 2:
-            return None
-        _, x0, y0, _ = self.gnss[max(0, len(self.gnss) - 5)]
-        _, x1, y1, _ = self.gnss[-1]
-        if math.hypot(x1 - x0, y1 - y0) < 2.0:
-            return None
-        return math.atan2(y1 - y0, x1 - x0)
+    def _reinit(self, gap):
+        """Ask Autoware to initialise from GNSS itself: an empty pose list makes the
+        pose_initializer take the GNSS position and run NDT's multi-yaw search.
 
-    def _reinit(self, x, y, z, yaw, gap):
+        The first version passed a pose with a heading taken from GNSS motion or,
+        when stationary, from the current fused pose -- which is exactly the pose
+        that had gone wrong. Every 20 s it re-seeded a parked car with a different
+        bad heading (-97, 56, 140 ... deg), NDT scored 0, the pose jumped, and the
+        controller swung the steering: the "wheel moving on its own" and the
+        unexpected reversing on 2026-10-06."""
         if not self.cli.service_is_ready():
             self.get_logger().warn("initialize service not ready")
             return
-        req = InitializeLocalization.Request()
-        p = PoseWithCovarianceStamped()
-        p.header.frame_id = "map"
-        p.header.stamp = self.get_clock().now().to_msg()
-        p.pose.pose.position.x, p.pose.pose.position.y, p.pose.pose.position.z = x, y, z
-        p.pose.pose.orientation.z, p.pose.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
-        cov = [0.0] * 36
-        cov[0] = cov[7] = 1.0
-        cov[35] = 0.1
-        p.pose.covariance = cov
-        req.pose = [p]
-        self.cli.call_async(req)
-        self.get_logger().warn(f"NDT {gap:.0f} m off GNSS -> reinitialised at ({x:.1f}, {y:.1f}), "
-                               f"yaw {math.degrees(yaw):.0f} deg")
+        self.cli.call_async(InitializeLocalization.Request())
+        self.get_logger().warn(f"NDT {gap:.0f} m off GNSS -> GNSS+NDT initialisation requested "
+                               f"(try {self.tries + 1}/{MAX_TRIES})")
 
 
 def main():
