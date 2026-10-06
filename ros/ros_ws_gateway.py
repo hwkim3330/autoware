@@ -268,7 +268,10 @@ class Bridge(Node):
         self.create_subscription(LocalizationInitializationState,
                                  "/api/localization/initialization_state",
                                  lambda m: self._set("loc", m), tl)
-        self.create_subscription(Trajectory, "/planning/scenario_planning/trajectory",
+        # The final trajectory is /planning/trajectory in this Autoware (0.50): the old
+        # /planning/scenario_planning/trajectory has no publisher, so this read 0 points
+        # forever -- the tablet/dashboard never drew a trajectory.
+        self.create_subscription(Trajectory, "/planning/trajectory",
                                  lambda m: self._set("traj", m), 1)
         from std_msgs.msg import String as _Str
         self.create_subscription(_Str, "/multimode/mode",
@@ -327,22 +330,27 @@ class Bridge(Node):
                                  lambda m: self._set("blinkcmd", m), 1)
         be = QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST)
         from sensor_msgs.msg import PointCloud2
+        # raw=True: only the arrival time is used, so skip deserialising every cloud
         self.create_subscription(PointCloud2, "/localization/util/downsample/pointcloud",
-                                 self._lidar_tick, be)
+                                 self._lidar_tick, be, raw=True)
         # front-camera frames for the tablet popup (YOLOX overlay if running, else
         # the raw camera). Throttled + downscaled + JPEG-encoded in the callback;
         # the camera_producer() coroutine ships the latest frame at ~6 Hz.
         self._jpg = None; self._jpg_t = 0.0
         from sensor_msgs.msg import Image as _Img
+        # Cameras are subscribed raw and only deserialised when the throttle in the callback
+        # lets a frame through: rclpy otherwise deserialises every 1080p frame into Python
+        # before the callback can drop it, which made this the heaviest process in the stack.
+        self._Img = _Img
         for topic in ("/tensorrt_yolox/out/image", "/sensing/camera/camera0/image_rect_color"):
-            self.create_subscription(_Img, topic, self._cam_cb, be)
+            self.create_subscription(_Img, topic, self._cam_cb, be, raw=True)
         # Traffic-light recognition from AWSIM's traffic_light camera. AWSIM-Demo gives
         # NO signal states over ROS (V2I + /perception/...signals are empty), so we read
         # the ACTUAL rendered light off the camera image -> the tablet matches the sim and
         # the car stops on the real red. Detected colour: 1=RED 2=AMBER 3=GREEN, 0=none.
         self._cam_tl_color = 0; self._cam_tl_t = 0.0
         self.create_subscription(_Img, "/sensing/camera/traffic_light/image_raw",
-                                 self._tl_cam_cb, be)
+                                 self._tl_cam_cb, be, raw=True)
         # per-LiDAR liveness (ROii 4-lidar suite; in 1-lidar mode only front maps)
         self.lidar_part_t = {k: [] for k in
                              ("front", "rear", "side_left", "side_right")}
@@ -515,7 +523,8 @@ class Bridge(Node):
             self._adapi_manual_selected = False
         self.teleop = {"v": 0.0, "steer": 0.0, "until": 0.0}
         self._teleop_armed = False
-        self.create_timer(0.01, self._teleop_tick, callback_group=cbg)  # sim-time backup
+        # sim-time backup; 20 Hz is plenty for teleop and 100 Hz cost a core under AWSIM's clock
+        self.create_timer(0.05, self._teleop_tick, callback_group=cbg)
         threading.Thread(target=self._teleop_wall_loop, daemon=True).start()
         # CARLA direct-control backup is only for CARLA launches. In AWSIM it
         # repeatedly times out on port 2000 and can starve manual ROS publishing.
@@ -791,6 +800,8 @@ class Bridge(Node):
         if now - self._cam_tl_t < 0.33:
             return
         self._cam_tl_t = now
+        from rclpy.serialization import deserialize_message
+        m = deserialize_message(m, self._Img)
         try:
             import numpy as np
             h, w = m.height, m.width
@@ -816,6 +827,8 @@ class Bridge(Node):
         now = time.monotonic()
         if now - self._jpg_t < 0.16:
             return
+        from rclpy.serialization import deserialize_message
+        m = deserialize_message(m, self._Img)
         try:
             import numpy as np, cv2, base64
             h, w = m.height, m.width
