@@ -126,6 +126,11 @@ DK "sed -i '/name: launch_boundary_departure_prevention_module/{n;s/\"true\"/\"f
 # had v=0 from the 10th point on, because the drivable area there is narrower than the road.
 # Set live with option.enable_outside_drivable_area_stop=false the car drove through.
 DK "sed -i -E 's/(enable_outside_drivable_area_stop:) *true/\1 false/' /opt/autoware/share/autoware_launch/config/planning/scenario_planning/lane_driving/motion_planning/autoware_path_optimizer/path_optimizer.param.yaml"
+# start_planner off. On every start from standstill it planned a "pull-out" at 1.4 then
+# 2.2 m/s for ~60 m -- the slow crawl the driver saw after each stop -- and when it found no
+# "safe" pull-out (backward/freespace already off) it published a stop path and the car never
+# left. On a road demo the car is already in its lane; plain lane following starts it.
+DK "sed -i '/name: launch_start_planner_module/{n;s/\"true\"/\"false\"/}' /opt/autoware/share/autoware_launch/config/planning/preset/default_preset.yaml"
 # DDS transport: default SHM+UDP (shared host /dev/shm via --ipc=host) is what works for
 # data flow + localization. (Tried: isolated /dev/shm -> no data flow; UDP-only profile ->
 # "Not enough memory in the buffer stream" on node init + preprocessing breaks.) Known
