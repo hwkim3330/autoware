@@ -289,6 +289,12 @@ DK "echo 'relay: '\$(grep relayed /tmp/relay.log 2>/dev/null|tail -1)
 # driver -- AWSIM publishes the cloud itself -- and pose_instability_detector, a diagnostic
 # that aborts at start-up on this image under CARLA as well.)
 BAD=$(DK "grep -E 'load_node \\(timeout\\)|Failed to load node|process has died' /tmp/awsim_aw.log | grep -vcE 'velodyne|pose_instability_detector'" | tr -dc 0-9)
+# A planner can also miss the latched 7 MB vector map over shared memory and wait forever
+# (motion_velocity_planner "Waiting for the map" -> no lane-driving trajectory -> engage
+# times out). Count it as a failure if it is still waiting at the end of bring-up.
+sleep 10
+MAPWAIT=$(DK "tail -400 /tmp/awsim_aw.log | grep -c 'Waiting for the map'" | tr -dc 0-9)
+[ "${MAPWAIT:-0}" != "0" ] && { echo "==> self-check: a planner is still waiting for the map"; BAD=$(( ${BAD:-0} + 1 )); }
 if [ "${BAD:-0}" != "0" ]; then
   if [ -z "${AWSIM_RETRY:-}" ]; then
     echo "==> self-check: $BAD failed node load(s)/deaths in Autoware -- relaunching once"
