@@ -151,6 +151,18 @@ setInterval(() => {
 }, 500);
 
 let zoom = 4.0; // px per metre, eased with speed
+// The gateway sends a few frames a second, so drawing the raw pose made the map jump.
+// V eases toward the latest pose every draw; a jump of more than 30 m (teleport/re-init)
+// snaps instead of sliding across the city.
+const V = { x: 0, y: 0, yaw: 0, init: false };
+function easePose() {
+  const e = S.ego; if (!e) return;
+  const yaw = (e.yawDeg || 0) * Math.PI / 180;
+  if (!V.init || Math.hypot(e.x - V.x, e.y - V.y) > 30) { V.x = e.x; V.y = e.y; V.yaw = yaw; V.init = true; return; }
+  const k = 0.25;
+  V.x += (e.x - V.x) * k; V.y += (e.y - V.y) * k;
+  let d = yaw - V.yaw; d = Math.atan2(Math.sin(d), Math.cos(d)); V.yaw += d * k;
+}
 let lastDraw = 0;
 function draw(t) {
   requestAnimationFrame(draw);
@@ -161,12 +173,13 @@ function draw(t) {
   if (S.ego) {
     const target = (H / 760) * (9.0 - Math.min(lastSpeed, 60) / 60 * 4.5);   // window-relative, zoom out with speed
     zoom += (target - zoom) * 0.05;
-    const yaw = (S.ego.yawDeg || 0) * Math.PI / 180;
+    easePose();
+    const yaw = V.yaw;
     cx.save();
     cx.translate(W / 2, H * 0.68);
     cx.scale(zoom, -zoom);              // world y up
     cx.rotate(-(yaw - Math.PI / 2));    // heading up
-    cx.translate(-S.ego.x, -S.ego.y);
+    cx.translate(-V.x, -V.y);
     // road surface: thick strokes along lane polylines, then thin lane lines
     const stroke = (lw, col) => {
       cx.strokeStyle = col; cx.lineWidth = lw; cx.lineCap = 'round'; cx.lineJoin = 'round';
@@ -184,7 +197,7 @@ function draw(t) {
     path(S.route, 1.6, routeCol, 0.35);
     path(S.traj, 1.1, routeCol, 0.9);
     // ego car
-    cx.translate(S.ego.x, S.ego.y); cx.rotate(yaw);
+    cx.translate(V.x, V.y); cx.rotate(yaw);
     cx.fillStyle = S.op === 'AUTONOMOUS' ? routeCol : '#16181d';
     roundRect(-2.4, -0.95, 4.8, 1.9, 0.5); cx.fill();
     cx.fillStyle = '#fff'; roundRect(0.6, -0.75, 1.2, 1.5, 0.3); cx.fill();
