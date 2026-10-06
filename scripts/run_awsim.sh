@@ -103,6 +103,11 @@ DK "sed -i 's/use_emergency_handling: true/use_emergency_handling: false/' /opt/
 # load spikes (load avg ~26, see header). If the heartbeat topic itself gets starved under
 # load, the gate can force emergency behavior independent of use_emergency_handling above.
 DK "sed -i 's/system_emergency_heartbeat_timeout: 0.5/system_emergency_heartbeat_timeout: 3.0/' /opt/autoware/share/autoware_launch/config/control/vehicle_cmd_gate/vehicle_cmd_gate.param.yaml"
+# scenario_selector drops any trajectory older than th_max_message_delay_sec (1.0 s). Under
+# AWSIM + full Autoware on this box the lane-driving trajectory arrives ~1.1 s late, so
+# every one was dropped and /planning/scenario_planning/trajectory stayed at 0 Hz even with
+# a route set and AUTONOMOUS engaged (measured 2026-10-06). Widen it.
+DK "sed -i -E 's/(th_max_message_delay_sec:) *[0-9.]+/\1 5.0/' /opt/autoware/share/autoware_scenario_selector/config/scenario_selector.param.yaml"
 # DDS transport: default SHM+UDP (shared host /dev/shm via --ipc=host) is what works for
 # data flow + localization. (Tried: isolated /dev/shm -> no data flow; UDP-only profile ->
 # "Not enough memory in the buffer stream" on node init + preprocessing breaks.) Known
