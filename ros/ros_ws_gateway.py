@@ -1833,6 +1833,10 @@ async def handler(ws):
         print(f"[-] app disconnected ({len(CLIENTS)})")
 
 
+def _yaw_of(q):
+    return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+
+
 def steer_frame():
     """Small message for the wheel: commanded and measured tire angle (deg, + = left)."""
     s = BRIDGE.s
@@ -1840,6 +1844,12 @@ def steer_frame():
     return json.dumps({
         "type": "steer",
         "kmh": round(od[0].twist.twist.linear.x * 3.6, 1) if od else None,
+        # pose at 20 Hz too: the dashboard interpolates between these instead of easing
+        # toward the 2 Hz frame pose, which made the car surge and stall on screen
+        "x": round(od[0].pose.pose.position.x, 3) if od else None,
+        "y": round(od[0].pose.pose.position.y, 3) if od else None,
+        "yawDeg": round(math.degrees(_yaw_of(od[0].pose.pose.orientation)), 2) if od else None,
+        "t": round(time.monotonic(), 3),
         "cmdDeg": round(math.degrees(cmd[0].lateral.steering_tire_angle), 2) if cmd else None,
         "actDeg": round(math.degrees(act[0].steering_tire_angle), 2) if act else None,
         "op": OP_MODE.get(op[0].mode, "UNKNOWN") if op else "UNKNOWN",
