@@ -362,13 +362,18 @@ const placeholder = new THREE.Mesh(new THREE.CapsuleGeometry(0.9, 2.8, 6, 16), p
 placeholder.rotation.z = Math.PI / 2; placeholder.position.y = 0.8; car.add(placeholder);
 { const draco = new DRACOLoader(); draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/gltf/');
   const loader = new GLTFLoader(); loader.setDRACOLoader(draco);
-  loader.load('https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/models/gltf/ferrari.glb', gltf => {
-    const m = gltf.scene.children[0];
-    const body = m.getObjectByName('body'); if (body) body.material = paintMat;
-    const glass = m.getObjectByName('glass');
-    if (glass) glass.material = new THREE.MeshPhysicalMaterial({ color: 0x15181d, metalness: .2, roughness: 0, transparent: true, opacity: .85 });
-    for (const n of ['rim_fl', 'rim_fr', 'rim_rr', 'rim_rl', 'trim']) { const o = m.getObjectByName(n);
-      if (o) o.material = new THREE.MeshStandardMaterial({ color: 0xc4c8cf, metalness: 1, roughness: .35 }); }
+  // Prefer a local Cybercab (Sketchfab "Tesla Cybercab 3D Model" by Grass Grass Grass /
+  // @zwir3kk, CC-BY; needs a login to download, so it is not fetched here) at
+  // models/cybercab.glb; otherwise the three.js Ferrari from the CDN.
+  const fitCar = (root, ferrari) => {
+    const m = ferrari ? root.children[0] : root;
+    if (ferrari) {
+      const body = m.getObjectByName('body'); if (body) body.material = paintMat;
+      const glass = m.getObjectByName('glass');
+      if (glass) glass.material = new THREE.MeshPhysicalMaterial({ color: 0x15181d, metalness: .2, roughness: 0, transparent: true, opacity: .85 });
+      for (const n of ['rim_fl', 'rim_fr', 'rim_rr', 'rim_rl', 'trim']) { const o = m.getObjectByName(n);
+        if (o) o.material = new THREE.MeshStandardMaterial({ color: 0xc4c8cf, metalness: 1, roughness: .35 }); }
+    }
     m.traverse(o => { if (o.isMesh) o.castShadow = true; });
     const holder = new THREE.Group(); holder.add(m);
     const size = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3());
@@ -376,7 +381,10 @@ placeholder.rotation.z = Math.PI / 2; placeholder.position.y = 0.8; car.add(plac
     holder.scale.setScalar(4.6 / Math.max(size.x, size.z));
     holder.position.y -= new THREE.Box3().setFromObject(holder).min.y;
     car.remove(placeholder); car.add(holder);
-  });
+  };
+  loader.load('models/cybercab.glb', g => { fitCar(g.scene, false);
+    document.querySelector('.credit').innerHTML = 'Car model: “Tesla Cybercab 3D Model” by <a href="https://sketchfab.com/3d-models/tesla-cybercab-3d-model-45c25fd8442b45129e47be2e66449ca3" target="_blank" rel="noopener">Grass Grass Grass</a> (CC-BY)'; },
+    undefined, () => loader.load('https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/models/gltf/ferrari.glb', g2 => fitCar(g2.scene, true)));
 }
 const halo = new THREE.Mesh(new THREE.RingGeometry(2.7, 2.95, 64), new THREE.MeshBasicMaterial({ transparent: true, opacity: .45, depthWrite: false }));
 halo.rotation.x = -Math.PI / 2; halo.renderOrder = 4; scene.add(halo);
