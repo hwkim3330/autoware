@@ -121,6 +121,11 @@ DK "sed -i '/name: launch_walkway_module/{n;s/\"true\"/\"false\"/}' /opt/autowar
 # and motion_velocity_planner zeroed the trajectory 3 m ahead while behavior_path still said
 # go -- the soak stalls at (81716, 50053) and (81688, 50130), every trip, at the same corners.
 DK "sed -i '/name: launch_boundary_departure_prevention_module/{n;s/\"true\"/\"false\"/}' /opt/autoware/share/autoware_launch/config/planning/preset/default_preset.yaml"
+# path_optimizer outside-drivable-area stop off: the actual culprit at (81688, 50130) --
+# turning off boundary_departure did not clear that stall; path_optimizer's own trajectory
+# had v=0 from the 10th point on, because the drivable area there is narrower than the road.
+# Set live with option.enable_outside_drivable_area_stop=false the car drove through.
+DK "sed -i -E 's/(enable_outside_drivable_area_stop:) *true/\1 false/' /opt/autoware/share/autoware_launch/config/planning/scenario_planning/lane_driving/motion_planning/autoware_path_optimizer/path_optimizer.param.yaml"
 # DDS transport: default SHM+UDP (shared host /dev/shm via --ipc=host) is what works for
 # data flow + localization. (Tried: isolated /dev/shm -> no data flow; UDP-only profile ->
 # "Not enough memory in the buffer stream" on node init + preprocessing breaks.) Known
