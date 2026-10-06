@@ -56,8 +56,12 @@ async def run(url, minutes, out):
                     gapmax = max(gapmax, gap)
                 if op == "AUTONOMOUS" and engaged_at is None:
                     engaged_at = now - t0
+                if not e.get("x") and not e.get("y"):
+                    continue                    # gateway sends (0,0) while odometry is absent
                 if last_xy is not None:
-                    dist += math.hypot(e["x"] - last_xy[0], e["y"] - last_xy[1])
+                    step = math.hypot(e["x"] - last_xy[0], e["y"] - last_xy[1])
+                    if step < 20.0:             # a teleport/re-init jump is not distance
+                        dist += step
                 last_xy = (e["x"], e["y"])
                 vmax = max(vmax, v)
                 if v > 0.3:
@@ -72,7 +76,8 @@ async def run(url, minutes, out):
                     break
             rec = {"trip": n, "outcome": outcome, "engage_s": None if engaged_at is None else round(engaged_at, 1),
                    "dist_m": round(dist, 1), "vmax_kmh": round(vmax * 3.6, 1), "gap_max_m": round(gapmax, 2),
-                   "dur_s": round(time.time() - t0, 1), "last_result": res[:60]}
+                   "dur_s": round(time.time() - t0, 1), "last_result": res[:60],
+                   "end_xy": None if last_xy is None else [round(last_xy[0], 1), round(last_xy[1], 1)]}
             trips.append(rec)
             print(json.dumps(rec, ensure_ascii=False), flush=True)
             if out:

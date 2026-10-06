@@ -113,6 +113,10 @@ DK "sed -i -E 's/(th_max_message_delay_sec:) *[0-9.]+/\1 5.0/' /opt/autoware/sha
 # both off, a car that cannot pull out forward just holds, and Reset puts it on the lane.
 SP=/opt/autoware/share/autoware_launch/config/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/start_planner/start_planner.param.yaml
 DK "sed -i -E 's/(enable_back:) *true/\1 false/; s/(enable_freespace_planner:) *true/\1 false/' $SP"
+# walkway module off: it must stop AT the line before a walkway, but the car halted ~20 m
+# short of it and never reached it -- the same deadlock at (81688, 50129) on every soak trip
+# (velocity factor 'sidewalk', APPROACHING 19.7 m). With no perception it protects nobody.
+DK "sed -i '/name: launch_walkway_module/{n;s/\"true\"/\"false\"/}' /opt/autoware/share/autoware_launch/config/planning/preset/default_preset.yaml"
 # DDS transport: default SHM+UDP (shared host /dev/shm via --ipc=host) is what works for
 # data flow + localization. (Tried: isolated /dev/shm -> no data flow; UDP-only profile ->
 # "Not enough memory in the buffer stream" on node init + preprocessing breaks.) Known
