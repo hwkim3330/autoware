@@ -102,11 +102,13 @@ class Demo:
                 if e.code == BTN_CROSS:
                     print("[cmd] drive (engage autonomous)", flush=True)
                     await self.send({"cmd": "drive"})
+                # Paddles always shift and zero the target speed. Gating R on
+                # v_target refused it after a crash: the car was stuck at 0 m/s
+                # while the held throttle kept the *target* high.
                 elif e.code == BTN_PADDLE_R:
-                    self.gear = 1; print("[gear] D", flush=True)
+                    self.gear, self.v_target = 1, 0.0; print("[gear] D", flush=True)
                 elif e.code == BTN_PADDLE_L:
-                    if abs(self.v_target) < 0.3:
-                        self.gear = -1; print("[gear] R", flush=True)
+                    self.gear, self.v_target = -1, 0.0; print("[gear] R", flush=True)
                 elif e.code == BTN_OPTIONS:
                     await self.send({"cmd": "stop"}); self.set_mode("MANUAL")
 
