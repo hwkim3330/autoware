@@ -1803,9 +1803,10 @@ async def handler(ws):
 def steer_frame():
     """Small message for the wheel: commanded and measured tire angle (deg, + = left)."""
     s = BRIDGE.s
-    cmd = s.get("ctrlcmd"); act = s.get("steer"); op = s.get("op")
+    cmd = s.get("ctrlcmd"); act = s.get("steer"); op = s.get("op"); od = s.get("odom")
     return json.dumps({
         "type": "steer",
+        "kmh": round(od[0].twist.twist.linear.x * 3.6, 1) if od else None,
         "cmdDeg": round(math.degrees(cmd[0].lateral.steering_tire_angle), 2) if cmd else None,
         "actDeg": round(math.degrees(act[0].steering_tire_angle), 2) if act else None,
         "op": OP_MODE.get(op[0].mode, "UNKNOWN") if op else "UNKNOWN",

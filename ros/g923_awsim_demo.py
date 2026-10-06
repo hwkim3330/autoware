@@ -40,8 +40,10 @@ VMAX_REV = 3.0
 ACCEL_RATE = 3.0            # m/s per second at full throttle
 BRAKE_RATE = 8.0            # m/s per second at full brake
 BRAKE_TAKEOVER = 0.25       # brake travel that counts as a takeover
-OVERRIDE_DEG = 25.0         # wheel this far off the autopilot's angle ...
-OVERRIDE_S = 0.3            # ... for this long = the driver is steering
+OVERRIDE_DEG = 45.0         # wheel this far off the autopilot's angle ...
+OVERRIDE_S = 0.6            # ... for this long, and not closing, = the driver is steering
+# (25 deg / 0.3 s fired on its own: with the damper on, the wheel simply lags a fast
+# steering command by ~35 deg and catches up -- that is lag, not a hand on the wheel.)
 
 # G29-class button layout in hid-generic order
 BTN_CROSS, BTN_PADDLE_R, BTN_PADDLE_L, BTN_OPTIONS = E.BTN_TRIGGER, E.BTN_TOP2, E.BTN_PINKIE, E.BTN_BASE4
@@ -189,14 +191,17 @@ class Demo:
     async def override_watch(self):
         """Tesla-style: turning the wheel against the autopilot disengages it."""
         held = 0.0
+        hist = []
         while True:
             await asyncio.sleep(0.05)
             ref = self.w.ref_angle()
             if self.mode != "AUTONOMOUS" or ref is None:
-                held = 0.0
+                held, hist = 0.0, []
                 continue
             dev = abs(self.w.angle() - ref)
-            held = held + 0.05 if dev > OVERRIDE_DEG else 0.0
+            hist = (hist + [dev])[-6:]                      # last 0.3 s
+            closing = len(hist) == 6 and hist[-1] < hist[0] - 3.0
+            held = held + 0.05 if (dev > OVERRIDE_DEG and not closing) else 0.0
             if held >= OVERRIDE_S:
                 print(f"[takeover] steering override ({dev:.0f} deg off the autopilot)", flush=True)
                 self.set_mode("MANUAL")
