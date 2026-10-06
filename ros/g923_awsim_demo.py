@@ -50,7 +50,7 @@ def pedal(v):  # 255 = released, 0 = floored
 class Demo:
     def __init__(self):
         g923_wheel.switch_mode()
-        self.w = g923_wheel.Wheel(kp=5.0, kd=0.3, max_force=0.5)
+        self.w = g923_wheel.Wheel(kp=4.0, kd=0.6, max_force=0.45)
         self.ev = self.w.ev
         self.mode = "MANUAL"          # until the vehicle reports AUTONOMOUS
         self.gear = 1                 # +1 D, -1 R

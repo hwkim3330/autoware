@@ -24,10 +24,15 @@ class Stub(Node):
         # without the heavy occupancy_grid_map node (perception:=false).
         self.og = self.create_publisher(OccupancyGrid, "/perception/occupancy_grid_map/map", 1)
         self._og_res = 0.5; self._og_n = 300  # 150 m x 150 m @ 0.5 m, all free
-        try:
-            self.tl = self.create_publisher(TrafficLightGroupArray, "/perception/traffic_light_recognition/traffic_signals", 1)
-        except Exception:
-            self.tl = None
+        # STUB_EMPTY_TRAFFIC_LIGHTS=0 when traffic_light_all_green.py owns the topic: two
+        # publishers alternate an empty set with the green one, and the traffic-light
+        # module then reads UNKNOWN and holds the car at the stop line (AWSIM, 2026-10-06).
+        self.tl = None
+        if os.environ.get("STUB_EMPTY_TRAFFIC_LIGHTS", "1") != "0":
+            try:
+                self.tl = self.create_publisher(TrafficLightGroupArray, "/perception/traffic_light_recognition/traffic_signals", 1)
+            except Exception:
+                self.tl = None
         self.create_timer(0.1, self.tick)
         self.get_logger().info("perception_stub: empty objects + obstacle pointcloud + clear occupancy grid")
 

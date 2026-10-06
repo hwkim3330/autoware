@@ -90,17 +90,34 @@ class Wheel:
         v = self.ev.absinfo(evdev.ecodes.ABS_X).value
         return -(v - self.mid) / self.half * RANGE_DEG / 2.0
 
+    # Smoothing. The target arrives as steps a few times a second (gateway frames),
+    # and a 10 ms finite-difference velocity on the 16-bit axis is noisy, so a raw PD
+    # on both jerked the wheel. The reference now chases the target through a
+    # first-order lag with a slew limit, velocity is low-passed, and errors inside
+    # DEADBAND_DEG produce no force.
+    REF_TAU_S = 0.25
+    SLEW_DEG_S = 240.0
+    VEL_ALPHA = 0.15
+    DEADBAND_DEG = 1.5
+
     def _loop(self):
         prev, prev_t = self.angle(), time.monotonic()
+        ref, vel = prev, 0.0
         while self.running:
             now = time.monotonic()
+            dt = max(now - prev_t, 1e-3)
             a = self.angle()
-            vel = (a - prev) / max(now - prev_t, 1e-3)
+            vel += self.VEL_ALPHA * ((a - prev) / dt - vel)
             prev, prev_t = a, now
             if self.target is None:        # servo released: no constant force
-                f = 0.0
+                f, ref = 0.0, a
             else:
-                err = self.target - a
+                step = (self.target - ref) * min(1.0, dt / self.REF_TAU_S)
+                lim = self.SLEW_DEG_S * dt
+                ref += max(-lim, min(lim, step))
+                err = ref - a
+                if abs(err) < self.DEADBAND_DEG:
+                    err = 0.0
                 f = self.kp * err / 90.0 - self.kd * vel / 90.0   # +f = push left
                 f = max(-self.max_force, min(self.max_force, f))
             # classic constant force: 0x80 neutral, higher = left (measured on the G923)
