@@ -203,6 +203,13 @@ class Demo:
 
 
 if __name__ == "__main__":
+    import signal
+    # SIGTERM/SIGHUP must run the finally in Demo.run() so the wheel's forces are
+    # stopped; a killed bridge otherwise leaves the last spring holding the wheel.
+    def _quit(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _quit)
+    signal.signal(signal.SIGHUP, _quit)
     try:
         asyncio.run(Demo().run())
     except KeyboardInterrupt:
