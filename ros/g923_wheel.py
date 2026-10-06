@@ -106,17 +106,36 @@ class Wheel:
     # noisy finite-difference velocity. Measured on the G923: spring centre 0x80 ->
     # 0 deg, 0xa0 -> -110.7 deg, 0x60 -> +112.6 deg, i.e. ~3.5 deg per count, + = left.
     DEG_PER_COUNT = 3.5
-    SPRING_K = 0x03      # 0..7 per side; gentle -- a hand must win easily
+    SPRING_K = 0x04      # 0..7 per side; 3 could not beat the damper near centre (stuck 5 deg off)
     SPRING_CLIP = 0x60   # max spring force, 0..255 (0xa0 felt violent at speed)
 
     def ref_angle(self):
         """Where the wheel is being held (deg), or None when released."""
         return getattr(self, '_ref', None)
 
+    # The spring centre moves in 3.5 deg counts; a commanded angle hovering on a count
+    # boundary flipped it back and forth and the wheel ticked. Hysteresis: move only when
+    # the target is HYST_COUNTS past the current count. A firmware damper (slot 2) is
+    # also kept on while the servo runs, which takes the edge off every step.
+    HYST_COUNTS = 0.75
+    DAMPER_K = 0x04
+
+    def _damper(self, on):
+        if on and not getattr(self, '_damper_on', False):
+            k = self.DAMPER_K
+            self._send([0x21, 0x02, k, 0x00, k, 0x00, 0x00])
+            self._damper_on = True
+        elif not on and getattr(self, '_damper_on', False):
+            self._send([0x23, 0, 0, 0, 0, 0, 0])            # stop slot 2
+            self._damper_on = False
+
     def _spring(self, centre_angle):
-        c = int(round(0x80 - centre_angle / self.DEG_PER_COUNT))
-        c = max(1, min(254, c))
-        if c != getattr(self, '_last_c', None):
+        cf = 0x80 - centre_angle / self.DEG_PER_COUNT
+        last = getattr(self, '_last_c', None)
+        if last is not None and abs(cf - last) < self.HYST_COUNTS:
+            return
+        c = max(1, min(254, int(round(cf))))
+        if c != last:
             k = self.SPRING_K
             self._send([0x11, 0x01, c, c, (k << 4) | k, 0x00, self.SPRING_CLIP])
             self._last_c = c
@@ -132,6 +151,7 @@ class Wheel:
                 if getattr(self, '_last_c', None) is not None:
                     self._send([0x13, 0, 0, 0, 0, 0, 0])
                     self._last_c = None
+                self._damper(False)
                 ref = self.angle()
                 self._ref = None
             else:
@@ -139,6 +159,7 @@ class Wheel:
                 lim = self.SLEW_DEG_S * dt
                 ref += max(-lim, min(lim, step))
                 self._ref = ref
+                self._damper(True)
                 self._spring(ref)
             time.sleep(0.02)
         self._send([0x13, 0, 0, 0, 0, 0, 0])            # stop slot 1
