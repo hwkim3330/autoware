@@ -1094,7 +1094,7 @@ class Bridge(Node):
         # retry up to ~40 s so tap-to-go succeeds first try (was a fixed 12 s window
         # that timed out before the planner finished -> "target mode not available").
         ra = None
-        for i in range(20):
+        for i in range(80):            # 0.5 s polling: a 2 s poll added up to 2 s per start
             with self.lock:
                 op = self.s.get("op")
             avail = bool(op and op[0].is_autonomous_mode_available) if op else False
@@ -1103,9 +1103,9 @@ class Bridge(Node):
                 if ra and ra.status.success:
                     self._accept_start_when_ready()
                     self._res("AUTONOMOUS"); return
-            if i % 3 == 0:
-                self._res(f"engaging... ({i + 1}/20){' (waiting for trajectory)' if not avail else ''}")
-            time.sleep(2.0)
+            if i % 6 == 0:
+                self._res(f"engaging... ({i // 2 + 1} s){' (waiting for trajectory)' if not avail else ''}")
+            time.sleep(0.5)
         self._res(f"route set, engage failed: {ra.status.message if ra else 'availability timeout'}")
 
     def _set_route_to(self, gx, gy, gtg, timeout=14.0):

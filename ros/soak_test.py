@@ -44,6 +44,7 @@ async def run(url, minutes, out):
             last_move = t0
             outcome = "timeout"
             res = ""
+            routed = False
             async for d in it:
                 now = time.time()
                 op = (d.get("operationMode") or {}).get("mode")
@@ -54,8 +55,14 @@ async def run(url, minutes, out):
                 gap = (d.get("multimode") or {}).get("gapM")
                 if gap is not None:
                     gapmax = max(gapmax, gap)
-                if op == "AUTONOMOUS" and engaged_at is None:
+                # count from THIS trip's engage: the mode is often still AUTONOMOUS from the
+                # previous trip while the gateway stops, re-routes and re-engages (~10-15 s),
+                # which the first version scored as a stall
+                if "route set" in res or "goto" in res:
+                    routed = True
+                if op == "AUTONOMOUS" and engaged_at is None and routed and res == "AUTONOMOUS":
                     engaged_at = now - t0
+                    last_move = now
                 if not e.get("x") and not e.get("y"):
                     continue                    # gateway sends (0,0) while odometry is absent
                 if last_xy is not None:
