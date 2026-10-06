@@ -83,7 +83,7 @@
 </div>
 <script>
 const WS_URL = new URLSearchParams(location.search).get('ws') || 'ws://127.0.0.1:8765/ws';
-const STEER_RATIO = 12;
+const STEER_RATIO = 8;
 const S = { ego: null, lanes: [], polys: [], route: [], traj: [], op: '', frame: null };
 let ws, sendQ = [];
 

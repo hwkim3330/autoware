@@ -95,8 +95,8 @@ class Wheel:
     # on both jerked the wheel. The reference now chases the target through a
     # first-order lag with a slew limit, velocity is low-passed, and errors inside
     # DEADBAND_DEG produce no force.
-    REF_TAU_S = 0.25
-    SLEW_DEG_S = 240.0
+    REF_TAU_S = 0.4
+    SLEW_DEG_S = 120.0
     VEL_ALPHA = 0.15
     DEADBAND_DEG = 1.5
 
@@ -106,8 +106,8 @@ class Wheel:
     # noisy finite-difference velocity. Measured on the G923: spring centre 0x80 ->
     # 0 deg, 0xa0 -> -110.7 deg, 0x60 -> +112.6 deg, i.e. ~3.5 deg per count, + = left.
     DEG_PER_COUNT = 3.5
-    SPRING_K = 0x05      # 0..7 per side
-    SPRING_CLIP = 0xa0   # max spring force, 0..255
+    SPRING_K = 0x03      # 0..7 per side; gentle -- a hand must win easily
+    SPRING_CLIP = 0x60   # max spring force, 0..255 (0xa0 felt violent at speed)
 
     def ref_angle(self):
         """Where the wheel is being held (deg), or None when released."""

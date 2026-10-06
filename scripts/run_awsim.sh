@@ -108,6 +108,11 @@ DK "sed -i 's/system_emergency_heartbeat_timeout: 0.5/system_emergency_heartbeat
 # every one was dropped and /planning/scenario_planning/trajectory stayed at 0 Hz even with
 # a route set and AUTONOMOUS engaged (measured 2026-10-06). Widen it.
 DK "sed -i -E 's/(th_max_message_delay_sec:) *[0-9.]+/\1 5.0/' /opt/autoware/share/autoware_scenario_selector/config/scenario_selector.param.yaml"
+# start_planner: no backward or freespace pull-out on a road demo. After a respawn the car
+# reversed on its own (enable_back) -- surprising to a driver with hands on the wheel. With
+# both off, a car that cannot pull out forward just holds, and Reset puts it on the lane.
+SP=/opt/autoware/share/autoware_launch/config/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/start_planner/start_planner.param.yaml
+DK "sed -i -E 's/(enable_back:) *true/\1 false/; s/(enable_freespace_planner:) *true/\1 false/' $SP"
 # DDS transport: default SHM+UDP (shared host /dev/shm via --ipc=host) is what works for
 # data flow + localization. (Tried: isolated /dev/shm -> no data flow; UDP-only profile ->
 # "Not enough memory in the buffer stream" on node init + preprocessing breaks.) Known

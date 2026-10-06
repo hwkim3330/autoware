@@ -33,8 +33,8 @@ import g923_wheel  # noqa: E402
 
 E = evdev.ecodes
 URL = sys.argv[1] if len(sys.argv) > 1 else "ws://127.0.0.1:8765/ws"
-STEER_RATIO = 12.0          # wheel deg per tire deg (900 deg lock -> +-37 deg tire)
-MAX_WHEEL_DEG = 440.0
+STEER_RATIO = 8.0           # wheel deg per tire deg; 12 swung the wheel too far for comfort
+MAX_WHEEL_DEG = 300.0
 VMAX = 12.0                 # m/s manual forward cap (~43 km/h)
 VMAX_REV = 3.0
 ACCEL_RATE = 3.0            # m/s per second at full throttle
