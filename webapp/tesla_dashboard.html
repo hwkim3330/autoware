@@ -72,6 +72,7 @@
     <div class="btns">
       <button class="primary" id="go">오토파일럿</button>
       <button id="stop">정지</button>
+      <button id="reset">리셋</button>
     </div>
   </section>
   <section class="right">
@@ -89,6 +90,7 @@ let ws, sendQ = [];
 function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 document.getElementById('go').onclick = () => send({ cmd: 'drive' });
 document.getElementById('stop').onclick = () => send({ cmd: 'stop' });
+document.getElementById('reset').onclick = () => send({ cmd: 'respawn' });
 
 function connect() {
   ws = new WebSocket(WS_URL);

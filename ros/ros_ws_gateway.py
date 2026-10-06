@@ -59,6 +59,8 @@ logging.getLogger("websockets").setLevel(logging.CRITICAL)
 MAP_OSM = os.environ.get("LANELET_OSM", "/root/autoware_map/Town01/lanelet2_map.osm")
 # CARLA spawn "x, y, z, roll, pitch, yaw" (CARLA coords) -- for the respawn cmd
 CARLA_SPAWN = os.environ.get("CARLA_SPAWN", "")
+# AWSIM spawn in the map frame, "x,y,z,yaw_deg"; enables the AWSIM respawn path.
+AWSIM_SPAWN = os.environ.get("AWSIM_SPAWN", "")
 RVIZ_DISPLAY = os.environ.get("RVIZ_DISPLAY", ":1")
 # Map geo-origin (lat,lon) + site name so the tablet can place the local map-frame
 # ego on a real OpenStreetMap basemap. Set by the OSM/real-map bring-up.
@@ -1167,6 +1169,8 @@ class Bridge(Node):
             pass
         self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
         time.sleep(1.0)
+        if AWSIM_SPAWN:
+            self._respawn_awsim(); return
         # candidate CARLA poses (x,y,z,roll,pitch,yaw), reliable first
         cands = []
         if CARLA_SPAWN:
@@ -1202,6 +1206,54 @@ class Bridge(Node):
             return fut.done()
         except Exception:
             return False
+
+    def _respawn_awsim(self):
+        """AWSIM: teleport the ego to the spawn and re-seed localization there.
+
+        AWSIM-Demo subscribes to the RViz pose-teleport plugin's topic (found in its
+        Assembly-CSharp), so a map-frame pose there moves the car. Then the AD API
+        initialize puts NDT at the same pose. Needed because a car crashed off the
+        lane is unrecoverable for the planner (start_planner: "Not found safe pull
+        out path"; every goal: "footprint exceeds lane") -- seen 2026-10-06."""
+        from geometry_msgs.msg import PoseWithCovarianceStamped as _P
+        from autoware_adapi_v1_msgs.srv import InitializeLocalization as _Init
+        x, y, z, yaw_deg = [float(v) for v in AWSIM_SPAWN.split(",")]
+        yaw = math.radians(yaw_deg)
+        if not hasattr(self, "pub_awsim_tp"):
+            self.pub_awsim_tp = self.create_publisher(
+                _P, "/awsim/awsim_rviz_plugins/pose_teleport/pose_with_covariance", 1)
+            self.cli_init = self.create_client(_Init, "/api/localization/initialize")
+            time.sleep(1.0)
+
+        def pose():
+            m = _P()
+            m.header.frame_id = "map"
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.pose.pose.position.x, m.pose.pose.position.y, m.pose.pose.position.z = x, y, z
+            m.pose.pose.orientation.z, m.pose.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+            c = [0.0] * 36
+            c[0] = c[7] = 0.25
+            c[35] = 0.068
+            m.pose.covariance = c
+            return m
+
+        self._res("respawn: teleporting to spawn...")
+        for _ in range(3):                       # latching is not guaranteed; repeat
+            self.pub_awsim_tp.publish(pose())
+            time.sleep(0.3)
+        time.sleep(1.5)
+        req = _Init.Request()
+        req.pose = [pose()]
+        self._call(self.cli_init, req, timeout=10.0)
+        for _ in range(20):                      # verify NDT actually landed there
+            time.sleep(0.5)
+            with self.lock:
+                od = self.s.get("odom")
+            if od:
+                p = od[0].pose.pose.position
+                if math.hypot(p.x - x, p.y - y) < 2.0:
+                    self._res("respawn OK -- at spawn, ready to DRIVE"); return
+        self._res("respawn: teleported, localization not at spawn yet")
 
     def _teleport_to(self, x, y, z, roll, pitch, yaw):
         """Recover to a CARLA pose by publishing /initialpose. The CARLA

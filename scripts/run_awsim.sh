@@ -245,7 +245,7 @@ echo "==> [3.6] gateway (Tesla tablet feed, WS :8765)"
 # 2026-07-07: now goes through /external/selected/* instead). The real gate alone drives
 # cleanly. (use_emergency_handling:=false already stops the gate's own PARK-on-diag.)
 DKD "$FASTDDS ulimit -n 65536
-     export LANELET_OSM=/root/autoware_map/shinjuku/lanelet2_map.osm NIRO_ORIGIN='35.237658,138.793822' NIRO_SITE='shinjuku' DISPLAY=:1 XAUTHORITY=/root/.Xauthority
+     export LANELET_OSM=/root/autoware_map/shinjuku/lanelet2_map.osm NIRO_ORIGIN='35.237658,138.793822' NIRO_SITE='shinjuku' AWSIM_SPAWN='81381.73,49920.19,41.58,35' DISPLAY=:1 XAUTHORITY=/root/.Xauthority
      source /opt/autoware/setup.bash; python3 -u /root/ros_ws_gateway.py --ros-args -p use_sim_time:=true > /tmp/gw.log 2>&1"
 # NOTE: do NOT auto-launch RViz on :1 - it steals X focus and Unity PAUSES AWSIM (drops to
 # 364MB, sensors stop, localization dies; AWSIM then won't resume without a container
@@ -259,4 +259,19 @@ DK "echo 'relay: '\$(grep relayed /tmp/relay.log 2>/dev/null|tail -1)
     echo 'gateway: '\$(pgrep -fc ros_ws_gateway) ' procs ; perception_stub: '\$(pgrep -fc perception_stub)' procs'
     echo 'NDT pose_buffer<2 (stops growing when converged): '\$(grep -c 'pose_buffer_.size() < 2' /tmp/awsim_aw.log)
     echo 'duplicate relay node check (should be 0 -- confirms the sed above actually removed it): '\$(grep -c pointcloud_relay_ring_to_concat /tmp/awsim_aw.log)"
+# Bring-up self-check. Under the launch burst a composable node occasionally fails to load
+# (seen: planning_validator's load_node timed out -> no /planning/trajectory -> every engage
+# ends in "availability timeout"). A clean relaunch has always cleared it, so do that once.
+# (The Velodyne hardware driver always fails to load here -- AWSIM publishes the cloud itself
+# -- so it is excluded.)
+BAD=$(DK "grep -E 'load_node \\(timeout\\)|Failed to load node|process has died' /tmp/awsim_aw.log | grep -vc velodyne" | tr -dc 0-9)
+if [ "${BAD:-0}" != "0" ]; then
+  if [ -z "${AWSIM_RETRY:-}" ]; then
+    echo "==> self-check: $BAD failed node load(s)/deaths in Autoware -- relaunching once"
+    AWSIM_RETRY=1 exec bash "$0" "$@"
+  fi
+  echo "==> self-check: still $BAD failure(s) after the retry -- see /tmp/awsim_aw.log in the container"
+else
+  echo "==> self-check: every Autoware node loaded"
+fi
 echo "Done. Tablet feed: ws://127.0.0.1:8765/ws  (app: com.keti.awsim_tesla, adb reverse tcp:8765 tcp:8765)"

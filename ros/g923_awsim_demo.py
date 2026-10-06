@@ -12,6 +12,7 @@ Switching, like a real car:
     brake pedal           take over -> MANUAL
     turn the wheel        take over -> MANUAL (25 deg off the autopilot for 0.3 s)
     Options button        STOP (hold position)
+    Share button          RESET: teleport back to the spawn and re-seed localization
 
 Runs on the host (needs the wheel's hidraw, so root):
     sudo python3 g923_awsim_demo.py [ws://127.0.0.1:8765/ws]
@@ -44,6 +45,7 @@ OVERRIDE_S = 0.3            # ... for this long = the driver is steering
 
 # G29-class button layout in hid-generic order
 BTN_CROSS, BTN_PADDLE_R, BTN_PADDLE_L, BTN_OPTIONS = E.BTN_TRIGGER, E.BTN_TOP2, E.BTN_PINKIE, E.BTN_BASE4
+BTN_SHARE = E.BTN_BASE3
 
 
 def pedal(v):  # 255 = released, 0 = floored
@@ -117,6 +119,12 @@ class Demo:
                     self.gear, self.v_target = -1, 0.0; print("[gear] R", flush=True)
                 elif e.code == BTN_OPTIONS:
                     await self.send({"cmd": "stop"}); self.set_mode("MANUAL")
+                elif e.code == BTN_SHARE:
+                    print("[cmd] respawn", flush=True)
+                    self.set_mode("MANUAL"); self.v_target = 0.0
+                    await self.send({"cmd": "respawn"})
+                else:
+                    print(f"[btn] {E.BTN.get(e.code, E.KEY.get(e.code, e.code))}", flush=True)
 
     async def manual_loop(self):
         dt = 0.05
