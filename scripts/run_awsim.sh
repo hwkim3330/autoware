@@ -221,6 +221,10 @@ DKD "$FASTDDS ulimit -n 65536; export STUB_EMPTY_TRAFFIC_LIGHTS=0; source /opt/a
 # traffic-light module reads UNKNOWN and the car holds at the first stop line for good.
 SUDO docker cp "$REPO/ros/traffic_light_all_green.py" autoware:/root/traffic_light_all_green.py 2>/dev/null
 DKD "$FASTDDS source /opt/autoware/setup.bash; python3 -u /root/traffic_light_all_green.py $MAP/lanelet2_map.osm > /tmp/tl_green.log 2>&1"
+# Localization watchdog: NDT can lose the car (seen after fast manual driving: 230 m off GNSS
+# while still "converged"); re-initialise from GNSS when they disagree > 15 m for 3 s.
+SUDO docker cp "$REPO/ros/localization_watchdog.py" autoware:/root/localization_watchdog.py 2>/dev/null
+DKD "$FASTDDS source /opt/autoware/setup.bash; python3 -u /root/localization_watchdog.py --ros-args -p use_sim_time:=true > /tmp/loc_watchdog.log 2>&1"
 sleep 14   # let NDT start matching off the relayed concatenated cloud before seeding
 
 echo "==> [3.5] seed localization (Shinjuku x81378 y49917 yaw34) - service often hangs on SHM,"
