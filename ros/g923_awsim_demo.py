@@ -10,6 +10,7 @@ MANUAL      the wheel steers, the pedals drive: throttle raises and brake lowers
 Switching, like a real car:
     X / cross button      engage AUTONOMOUS (gateway "drive": route ahead + engage)
     brake pedal           take over -> MANUAL
+    turn the wheel        take over -> MANUAL (25 deg off the autopilot for 0.3 s)
     Options button        STOP (hold position)
 
 Runs on the host (needs the wheel's hidraw, so root):
@@ -38,6 +39,8 @@ VMAX_REV = 3.0
 ACCEL_RATE = 3.0            # m/s per second at full throttle
 BRAKE_RATE = 8.0            # m/s per second at full brake
 BRAKE_TAKEOVER = 0.25       # brake travel that counts as a takeover
+OVERRIDE_DEG = 25.0         # wheel this far off the autopilot's angle ...
+OVERRIDE_S = 0.3            # ... for this long = the driver is steering
 
 # G29-class button layout in hid-generic order
 BTN_CROSS, BTN_PADDLE_R, BTN_PADDLE_L, BTN_OPTIONS = E.BTN_TRIGGER, E.BTN_TOP2, E.BTN_PINKIE, E.BTN_BASE4
@@ -50,7 +53,7 @@ def pedal(v):  # 255 = released, 0 = floored
 class Demo:
     def __init__(self):
         g923_wheel.switch_mode()
-        self.w = g923_wheel.Wheel(kp=4.0, kd=0.6, max_force=0.45)
+        self.w = g923_wheel.Wheel()
         self.ev = self.w.ev
         self.mode = "MANUAL"          # until the vehicle reports AUTONOMOUS
         self.gear = 1                 # +1 D, -1 R
@@ -59,6 +62,7 @@ class Demo:
         self.ws = None
         self.steer_deg_vehicle = 0.0
         self.op = "?"
+        self.speed_ms = 0.0
         self.w.target = None
         self.w.autocenter(True)
 
@@ -72,7 +76,9 @@ class Demo:
         else:
             self.w.target = None
             self.w.autocenter(True)
-            self.v_target = 0.0
+            # like a Tesla disengaging: hand over at the current speed, not a stop;
+            # the brake pedal (if that was the takeover) then slows it as usual
+            self.v_target = abs(self.speed_ms)
         print(f"[mode] {mode}", flush=True)
 
     async def send(self, obj):
@@ -146,6 +152,7 @@ class Demo:
                             print(f"[vehicle] operation mode {op}", flush=True)
                         if op == "AUTONOMOUS" and self.brake < BRAKE_TAKEOVER:
                             self.set_mode("AUTONOMOUS")
+                        self.speed_ms = float((d.get("ego") or {}).get("speedKmh") or 0.0) / 3.6
                         veh = d.get("vehicle") or {}
                         self.steer_deg_vehicle = float(veh.get("steerDeg") or 0.0)
                         if self.mode == "AUTONOMOUS":
@@ -156,6 +163,22 @@ class Demo:
                 print(f"[gw] {ex!r}; retrying", flush=True)
                 await asyncio.sleep(2)
 
+    async def override_watch(self):
+        """Tesla-style: turning the wheel against the autopilot disengages it."""
+        held = 0.0
+        while True:
+            await asyncio.sleep(0.05)
+            ref = self.w.ref_angle()
+            if self.mode != "AUTONOMOUS" or ref is None:
+                held = 0.0
+                continue
+            dev = abs(self.w.angle() - ref)
+            held = held + 0.05 if dev > OVERRIDE_DEG else 0.0
+            if held >= OVERRIDE_S:
+                print(f"[takeover] steering override ({dev:.0f} deg off the autopilot)", flush=True)
+                self.set_mode("MANUAL")
+                held = 0.0
+
     async def status(self):
         while True:
             await asyncio.sleep(2)
@@ -165,7 +188,8 @@ class Demo:
 
     async def run(self):
         try:
-            await asyncio.gather(self.read_inputs(), self.manual_loop(), self.gateway(), self.status())
+            await asyncio.gather(self.read_inputs(), self.manual_loop(), self.gateway(),
+                                 self.override_watch(), self.status())
         finally:
             self.w.close()
 

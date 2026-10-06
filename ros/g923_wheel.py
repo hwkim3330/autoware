@@ -100,7 +100,50 @@ class Wheel:
     VEL_ALPHA = 0.15
     DEADBAND_DEG = 1.5
 
+    # Position control uses the wheel's OWN spring effect with a movable centre, so
+    # the closed loop runs in firmware. The host-side PD on constant force (kept below
+    # as _loop_pd) was jerky however it was tuned: 8-bit force, USB latency and a
+    # noisy finite-difference velocity. Measured on the G923: spring centre 0x80 ->
+    # 0 deg, 0xa0 -> -110.7 deg, 0x60 -> +112.6 deg, i.e. ~3.5 deg per count, + = left.
+    DEG_PER_COUNT = 3.5
+    SPRING_K = 0x05      # 0..7 per side
+    SPRING_CLIP = 0xa0   # max spring force, 0..255
+
+    def ref_angle(self):
+        """Where the wheel is being held (deg), or None when released."""
+        return getattr(self, '_ref', None)
+
+    def _spring(self, centre_angle):
+        c = int(round(0x80 - centre_angle / self.DEG_PER_COUNT))
+        c = max(1, min(254, c))
+        if c != getattr(self, '_last_c', None):
+            k = self.SPRING_K
+            self._send([0x11, 0x01, c, c, (k << 4) | k, 0x00, self.SPRING_CLIP])
+            self._last_c = c
+
     def _loop(self):
+        prev_t = time.monotonic()
+        ref = self.angle()
+        while self.running:
+            now = time.monotonic()
+            dt = max(now - prev_t, 1e-3)
+            prev_t = now
+            if self.target is None:        # released: no spring from us
+                if getattr(self, '_last_c', None) is not None:
+                    self._send([0x13, 0, 0, 0, 0, 0, 0])
+                    self._last_c = None
+                ref = self.angle()
+                self._ref = None
+            else:
+                step = (self.target - ref) * min(1.0, dt / self.REF_TAU_S)
+                lim = self.SLEW_DEG_S * dt
+                ref += max(-lim, min(lim, step))
+                self._ref = ref
+                self._spring(ref)
+            time.sleep(0.02)
+        self._send([0x13, 0, 0, 0, 0, 0, 0])            # stop slot 1
+
+    def _loop_pd(self):
         prev, prev_t = self.angle(), time.monotonic()
         ref, vel = prev, 0.0
         while self.running:
