@@ -1000,12 +1000,33 @@ class Bridge(Node):
                 for g2 in (gtg, gtg + math.pi):
                     r = self._set_route_to(gx, gy, g2, timeout=6.0)
                     if (r and r.status.success) or self._route_is_set():
+                        if self._route_is_detour(ex, ey, gx, gy):
+                            # A goal on a lane that only connects the long way round:
+                            # from the spawn a goal 60 m ahead routed ~400 m around the
+                            # blocks. Drop it and try the next candidate.
+                            self._call(self.cli_clear, ClearRoute.Request(), timeout=4.0)
+                            continue
                         self._engage(gx, gy); return
         # set_route_points can answer late; give the planner a moment, then check.
         time.sleep(2.0)
         if self._route_is_set():
             self._engage(None, None); return
         self._res("no routable goal found")
+
+    def _route_is_detour(self, ex, ey, gx, gy, ratio=1.8):
+        """True when the route just set is much longer than the straight line to the goal."""
+        for _ in range(10):                    # route_path is filled by the route callback
+            with self.lock:
+                rp = list(self.route_path)
+            if len(rp) > 1:
+                break
+            time.sleep(0.1)
+        else:
+            return False
+        length = sum(math.hypot(rp[i + 1][0] - rp[i][0], rp[i + 1][1] - rp[i][1])
+                     for i in range(len(rp) - 1))
+        straight = max(math.hypot(gx - ex, gy - ey), 1.0)
+        return length > ratio * straight + 30.0
 
     def _route_is_set(self):
         with self.lock:
@@ -1089,6 +1110,8 @@ class Bridge(Node):
 
     def _set_route_to(self, gx, gy, gtg, timeout=14.0):
         """Set a route to one goal pose; return the service result."""
+        with self.lock:
+            self.route_path = []      # so _route_is_detour measures this route, not the last
         req = SetRoutePoints.Request()
         req.header.frame_id = "map"
         req.header.stamp = self.get_clock().now().to_msg()
@@ -1254,6 +1277,16 @@ class Bridge(Node):
             m.pose.covariance = c
             return m
 
+        # Teleporting a moving car keeps its velocity: a respawn issued at 30 km/h slid the
+        # car off the spawn into a building, 37 deg off the lane, and planning_validator
+        # rejected every trajectory ("too far from ego"). Wait until it has stopped.
+        self._res("respawn: stopping before teleport...")
+        for _ in range(40):
+            with self.lock:
+                od = self.s.get("odom")
+            if od and abs(od[0].twist.twist.linear.x) < 0.2:
+                break
+            time.sleep(0.25)
         self._res("respawn: teleporting to spawn...")
         for _ in range(3):                       # latching is not guaranteed; repeat
             self.pub_awsim_tp.publish(pose())

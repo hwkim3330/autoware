@@ -68,6 +68,7 @@ class Demo:
         self.op = "?"
         self.speed_ms = 0.0
         self.steer_cmd_deg, self.steer_cmd_t = 0.0, 0.0
+        self.takeover_pending = False
         self.w.target = None
         self.w.autocenter(True)
 
@@ -84,6 +85,9 @@ class Demo:
             # like a Tesla disengaging: hand over at the current speed, not a stop;
             # the brake pedal (if that was the takeover) then slows it as usual
             self.v_target = abs(self.speed_ms)
+            # keep sending until the vehicle reports manual (a wheel-only takeover has no
+            # pedal input to carry the switch otherwise)
+            self.takeover_pending = True
         print(f"[mode] {mode}", flush=True)
 
     async def send(self, obj):
@@ -142,7 +146,17 @@ class Demo:
                 self.v_target = max(0.0, self.v_target - 0.5 * dt)   # coast down
             # wheel angle + = left, Autoware steering_tire_angle + = left (rad)
             tire = math.radians(self.w.angle() / STEER_RATIO)
-            if self.throttle > 0.02 or self.brake > 0.02 or self.v_target > 0.05:
+            # Only drive when the driver is actually on the pedals, or is still rolling
+            # under manual control after a takeover. A leftover target speed used to keep
+            # teleop alive after a reset/STOP, and "manual teleop active" then fought the
+            # next autopilot engage (start delayed ~15 s).
+            pedal = self.throttle > 0.02 or self.brake > 0.02
+            if self.op in ("LOCAL", "REMOTE"):
+                self.takeover_pending = False
+            if self.op not in ("LOCAL", "REMOTE") and not pedal and not self.takeover_pending:
+                self.v_target = 0.0
+                continue
+            if pedal or self.v_target > 0.05:
                 await self.send({"cmd": "teleop", "v": self.gear * self.v_target,
                                  "steer": max(-0.6, min(0.6, tire))})
 
